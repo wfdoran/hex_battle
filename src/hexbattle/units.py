@@ -11,15 +11,16 @@ from .grid import Hex
 
 STATS = ("health", "attack", "defense", "range", "movement", "sight")
 STAT_RANGES = {
-    "health": (2, 8),
+    "health": (4, 8),
     "attack": (1, 5),
     "defense": (1, 5),
     "range": (0, 4),
     "movement": (1, 4),
-    "sight": (1, 5),
+    "sight": (1, 4),
 }
 STAT_TOTAL = 15
 ROSTER_SIZE = 10
+MAX_RANGE_ZERO = 4  # at most this many units in a roster may have range 0
 
 # A stat line in STATS order: (health, attack, defense, range, movement, sight).
 StatLine = tuple[int, int, int, int, int, int]
@@ -33,9 +34,13 @@ def stat_combinations() -> tuple[StatLine, ...]:
 
 
 def random_roster(rng: random.Random, size: int = ROSTER_SIZE) -> list[StatLine]:
-    """Pick `size` stat lines, each uniformly from all valid combinations."""
+    """Pick `size` stat lines, each uniformly from all valid combinations,
+    redrawing the whole roster until no more than MAX_RANGE_ZERO have range 0."""
     combos = stat_combinations()
-    return [rng.choice(combos) for _ in range(size)]
+    while True:
+        roster = [rng.choice(combos) for _ in range(size)]
+        if sum(line[3] == 0 for line in roster) <= MAX_RANGE_ZERO:
+            return roster
 
 
 @dataclass(eq=False)

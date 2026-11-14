@@ -7,12 +7,17 @@ from dataclasses import dataclass
 from enum import Enum
 
 from .combat import battle_rounds, roll_damage
-from .grid import ALL_HEXES, Hex, distance, hexes_within, neighbors
+from .grid import ALL_HEXES, COLS, Hex, distance, hexes_within, neighbors
 from .units import StatLine, Unit, random_roster
 
 SETUP_COLUMNS = {1: (0, 1, 2), 2: (8, 9, 10)}
 # The game is a draw after this many consecutive turns with no move or attack.
 IDLE_TURNS_FOR_DRAW = 2
+# After this many consecutive turns without a battle or ranged attack, the two
+# outermost columns become radioactive, and they are destroyed (with any units
+# on them) once RADIATION_DELAY more turns have been played.
+QUIET_TURNS_FOR_RADIATION = 10
+RADIATION_DELAY = 2
 DRAW = 0
 
 
@@ -64,9 +69,18 @@ class RangedResult:
         return not self.target.alive
 
 
+@dataclass
+class RadiationEvent:
+    kind: str  # "warning" when columns become radioactive, "destroyed" when they are removed
+    columns: tuple[int, ...]
+    casualties: list[Unit]
+
+
 class Game:
     def __init__(self, seed: int | None = None, roster: list[StatLine] | None = None):
-        self.rng = random.Random(seed)
+        # Always have a seed, so any game's units can be replayed.
+        self.seed = seed if seed is not None else random.randrange(1, 1_000_000)
+        self.rng = random.Random(self.seed)
         self.roster = list(roster) if roster else random_roster(self.rng)
         # Both sides get identical copies of the same roster.
         self.units = [Unit.from_stats(owner, kind, stats)
@@ -79,12 +93,23 @@ class Game:
         self.winner: int | None = None  # 1, 2, or DRAW once the game is over
         self.idle_turns = 0
         self.acted = False  # whether the current player has moved or attacked this turn
+        self.fought = False  # whether there was a battle or ranged attack this turn
+        self.quiet_turns = 0
+        # Columns still on the board run from first_col to last_col.
+        self.first_col = 0
+        self.last_col = COLS - 1
+        self.radioactive_cols: tuple[int, ...] = ()
+        self.radiation_countdown = 0  # turns left before the radioactive columns go
 
     # ----- queries -------------------------------------------------------
 
     @property
     def over(self) -> bool:
         return self.phase is Phase.OVER
+
+    def on_board(self, h: Hex) -> bool:
+        """False for hexes in columns that radiation has destroyed."""
+        return self.first_col <= h[0] <= self.last_col
 
     def units_of(self, player: int) -> list[Unit]:
         """The player's living units."""
@@ -99,13 +124,13 @@ class Game:
     def visible_hexes(self, player: int) -> set[Hex]:
         """Hexes the player can currently see (the union of their units' sight)."""
         if self.phase is Phase.OVER:
-            return set(ALL_HEXES)
+            return {h for h in ALL_HEXES if self.on_board(h)}
         if self.phase is Phase.PLACEMENT:
             return set(self.setup_hexes(player))
         vis: set[Hex] = set()
         for u in self.units_of(player):
             vis |= hexes_within(u.pos, u.sight)
-        return vis
+        return {h for h in vis if self.on_board(h)}
 
     def _adjacent_enemies(self, h: Hex, player: int, known: set[Hex] | None = None) -> int:
         """Count enemy units next to h, optionally only those in `known` hexes."""
@@ -210,6 +235,7 @@ class Game:
             if enemy is not None:
                 taken.append(step)
                 battle = self._battle(unit, enemy, step)
+                self.fought = True
                 break
             # An enemy hidden in the fog may pin the unit partway along its path.
             if self._adjacent_enemies(here, unit.owner) >= 2:
@@ -267,25 +293,58 @@ class Game:
             self._remove(target)
         unit.fired = True
         self.acted = True
+        self.fought = True
         self._check_over()
         return RangedResult(unit, target, h, damage)
 
     # ----- turns ---------------------------------------------------------
 
-    def end_turn(self) -> None:
+    def end_turn(self) -> list[RadiationEvent]:
+        """Finish the current player's turn and return any radiation events."""
         if self.phase is not Phase.RANGED:
             raise RuleError("end the movement phase first")
+        events = self._advance_radiation()
+        self._check_over()
+        if self.over:
+            return events
         self.idle_turns = 0 if self.acted else self.idle_turns + 1
         if self.idle_turns >= IDLE_TURNS_FOR_DRAW:
             self._finish(DRAW)
-            return
+            return events
         self.current = opponent(self.current)
         self.turn += 1
         self._begin_turn()
+        return events
+
+    def _advance_radiation(self) -> list[RadiationEvent]:
+        if self.radiation_countdown:
+            self.radiation_countdown -= 1
+            if self.radiation_countdown:
+                return []
+            return [self._destroy_radioactive_columns()]
+        self.quiet_turns = 0 if self.fought else self.quiet_turns + 1
+        if self.quiet_turns < QUIET_TURNS_FOR_RADIATION:
+            return []
+        self.radioactive_cols = tuple(sorted({self.first_col, self.last_col}))
+        self.radiation_countdown = RADIATION_DELAY
+        return [RadiationEvent("warning", self.radioactive_cols, [])]
+
+    def _destroy_radioactive_columns(self) -> RadiationEvent:
+        cols = self.radioactive_cols
+        casualties = [u for u in self.units if u.alive and u.pos[0] in cols]
+        for u in casualties:
+            u.health = 0
+            self._remove(u)
+        self.first_col += 1
+        self.last_col -= 1
+        self.radioactive_cols = ()
+        self.quiet_turns = 0
+        return RadiationEvent("destroyed", cols, casualties)
 
     def _begin_turn(self) -> None:
         self.phase = Phase.MOVEMENT
         self.acted = False
+        self.fought = False
         for u in self.units:
             u.moved = u.fired = False
 

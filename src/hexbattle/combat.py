@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import random
+from functools import lru_cache
 
 # attack - defense -> percent chance of 0, 1, 2, ... damage in a single attack.
 DAMAGE_TABLE: dict[int, tuple[int, ...]] = {
@@ -54,3 +55,36 @@ def battle_rounds(att_health: int, att_attack: int, att_defense: int,
         att_health = max(0, att_health - to_att)
         rounds.append((to_def, to_att))
     return rounds, att_health, def_health
+
+
+@lru_cache(maxsize=None)
+def battle_odds(att_health: int, att_attack: int, att_defense: int,
+                def_health: int, def_attack: int, def_defense: int) -> tuple[float, float, float]:
+    """Exact probabilities that a battle ends with (attacker wins, defender wins, both destroyed)."""
+    to_def = damage_odds(att_attack, def_defense)
+    to_att = damage_odds(def_attack, att_defense)
+    # Rounds where nobody takes damage change nothing, so condition them away.
+    p_nothing = to_def[0] * to_att[0] / 10000
+
+    @lru_cache(maxsize=None)
+    def outcome(ah: int, dh: int) -> tuple[float, float, float]:
+        if ah <= 0 and dh <= 0:
+            return (0.0, 0.0, 1.0)
+        if dh <= 0:
+            return (1.0, 0.0, 0.0)
+        if ah <= 0:
+            return (0.0, 1.0, 0.0)
+        win = lose = both = 0.0
+        for dealt, p_dealt in enumerate(to_def):
+            for taken, p_taken in enumerate(to_att):
+                if dealt == taken == 0:
+                    continue
+                p = p_dealt * p_taken / 10000
+                w, l, b = outcome(ah - taken, dh - dealt)
+                win += p * w
+                lose += p * l
+                both += p * b
+        scale = 1 - p_nothing
+        return (win / scale, lose / scale, both / scale)
+
+    return outcome(att_health, def_health)

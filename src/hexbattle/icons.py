@@ -72,6 +72,18 @@ def eye(cv, x, y, s, color, tags=()):
     cv.create_oval(x - r, y - r, x + r, y + r, fill=color, outline=color, tags=tags)
 
 
+def radiation(cv, x, y, s, color, background, tags=()):
+    """The radiation trefoil: three blades around a central dot."""
+    r = s * 0.5
+    for start in (0, 120, 240):
+        cv.create_arc(x - r, y - r, x + r, y + r, start=start, extent=60, style="pieslice",
+                      fill=color, outline="", tags=tags)
+    gap = s * 0.17
+    cv.create_oval(x - gap, y - gap, x + gap, y + gap, fill=background, outline="", tags=tags)
+    dot = s * 0.11
+    cv.create_oval(x - dot, y - dot, x + dot, y + dot, fill=color, outline="", tags=tags)
+
+
 # Icon for each fixed stat, in the order they appear on a tile.
 STAT_ICONS = (
     ("attack", swords),

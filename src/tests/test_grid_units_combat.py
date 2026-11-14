@@ -2,9 +2,11 @@ import random
 import unittest
 from collections import deque
 
-from hexbattle.combat import DAMAGE_TABLE, battle_rounds, damage_odds, expected_damage
+from hexbattle.combat import (DAMAGE_TABLE, battle_odds, battle_rounds, damage_odds,
+                               expected_damage)
 from hexbattle.grid import ALL_HEXES, column_height, distance, label, neighbors
-from hexbattle.units import STAT_RANGES, STAT_TOTAL, STATS, random_roster, stat_combinations
+from hexbattle.units import (MAX_RANGE_ZERO, STAT_RANGES, STAT_TOTAL, STATS, random_roster,
+                             stat_combinations)
 
 
 class GridTest(unittest.TestCase):
@@ -63,6 +65,16 @@ class UnitsTest(unittest.TestCase):
         for line in roster:
             self.assertIn(line, stat_combinations())
 
+    def test_range_zero_cap(self):
+        rng = random.Random(4)
+        for _ in range(300):
+            roster = random_roster(rng)
+            self.assertLessEqual(sum(line[3] == 0 for line in roster), MAX_RANGE_ZERO)
+
+    def test_new_stat_limits(self):
+        self.assertEqual(STAT_RANGES["health"], (4, 8))
+        self.assertEqual(STAT_RANGES["sight"], (1, 4))
+
 
 class CombatTest(unittest.TestCase):
     def test_table_rows_sum_to_100(self):
@@ -86,6 +98,16 @@ class CombatTest(unittest.TestCase):
             self.assertGreaterEqual(min(ah, dh), 0)
             self.assertEqual(5 - ah, min(5, sum(r[1] for r in rounds)))
             self.assertEqual(4 - dh, min(4, sum(r[0] for r in rounds)))
+
+    def test_battle_odds_exact(self):
+        win, lose, both = battle_odds(5, 3, 2, 4, 2, 4)
+        self.assertAlmostEqual(win + lose + both, 1.0)
+        rng = random.Random(11)
+        n = 20000
+        wins = sum(battle_rounds(5, 3, 2, 4, 2, 4, rng)[2] == 0 and True for _ in range(n))
+        # wins here counts defender deaths, i.e. attacker wins plus mutual destruction
+        self.assertAlmostEqual(wins / n, win + both, delta=0.015)
+        self.assertEqual(battle_odds(1, 5, 1, 1, 5, 1)[2], 0.64 / (1 - 0.04))
 
 
 if __name__ == "__main__":

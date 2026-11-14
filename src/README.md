@@ -25,7 +25,9 @@ From this `src` directory:
 python3 -m hexbattle
 ```
 
-To replay the same first game (same units, same dice), pass a seed:
+The start screen chooses human vs computer (easy, medium or hard) or human
+vs human. Every game shows its seed. Enter it on the start screen to replay
+the same units. You can also pre-fill the seed from the command line:
 
 ```sh
 python3 -m hexbattle --seed 42
@@ -45,11 +47,11 @@ python3 -m unittest discover -s tests -t .
 |------|----------|
 | `hexbattle/grid.py`   | Hex coordinates, neighbors, distance, labels (A1–K5) |
 | `hexbattle/units.py`  | Unit stats and random roster generation |
-| `hexbattle/combat.py` | Damage table, single attacks, battles |
-| `hexbattle/game.py`   | Rules engine: setup, fog of war, movement, ranged attacks, turns, end of game |
-| `hexbattle/ai.py`     | Computer player |
-| `hexbattle/icons.py`  | Vector icons (heart, swords, shield, target, feet, eye) |
-| `hexbattle/gui.py`    | Tkinter window, board drawing, input, animation, log |
+| `hexbattle/combat.py` | Damage table, single attacks, battles, exact battle odds |
+| `hexbattle/game.py`   | Rules engine: setup, fog of war, movement, ranged attacks, turns, radiation, end of game |
+| `hexbattle/ai.py`     | Computer player (easy, medium, hard) |
+| `hexbattle/icons.py`  | Vector icons (heart, swords, shield, target, feet, eye, radiation) |
+| `hexbattle/gui.py`    | Tkinter window: start screen, board drawing, input, animation, hot-seat hand-off, per-player logs |
 | `tests/`              | Unit tests for the rules, plus whole AI-vs-AI games |
 
 The rules engine (`game.py`) does not depend on the GUI, so a different

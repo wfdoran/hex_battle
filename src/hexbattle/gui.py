@@ -1,4 +1,10 @@
-"""Tkinter user interface: the human plays Blue (Player 1) against the computer."""
+"""Tkinter user interface.
+
+A start screen picks human vs computer (with the computer's level) or human
+vs human.  Human vs human is played "hot seat" on one screen: between turns a
+hand-off screen hides the board, and each player has their own log so
+neither learns what the other's fog of war hides.
+"""
 
 from __future__ import annotations
 
@@ -7,12 +13,14 @@ import tkinter as tk
 from tkinter import messagebox
 
 from . import icons
-from .ai import ComputerPlayer
-from .game import DRAW, Game, MoveResult, Phase, RangedResult
-from .grid import ALL_HEXES, Hex, label
+from .ai import LEVELS, ComputerPlayer
+from .game import (DRAW, IDLE_TURNS_FOR_DRAW, QUIET_TURNS_FOR_RADIATION, Game, MoveResult,
+                   Phase, RadiationEvent, RangedResult, opponent)
+from .grid import ALL_HEXES, COLUMN_LETTERS, Hex, label
 from .units import Unit
 
-HUMAN, COMPUTER = 1, 2
+HUMAN, COMPUTER = 1, 2  # sides in a human vs computer game
+HUMAN_VS_COMPUTER, HUMAN_VS_HUMAN = "hvc", "hvh"
 PLAYER_NAMES = {1: "Blue", 2: "Red"}
 SQRT3 = math.sqrt(3)
 
@@ -21,6 +29,11 @@ COLORS = {
     "hex_visible": "#e8dec3",
     "hex_fog": "#8d8f92",
     "hex_outline": "#5b5850",
+    "hex_void": "#25282c",
+    "hex_void_outline": "#34383d",
+    "hot_visible": "#e3e36a",
+    "hot_fog": "#a6a764",
+    "trefoil": "#3b3a16",
     "label_visible": "#8a7f66",
     "label_fog": "#6c6e70",
     "move": "#a9d89b",
@@ -32,6 +45,14 @@ COLORS = {
     "tile_text": "#ffffff",
     "heart": "#ff5c74",
     "legend_icon": "#3a3a3a",
+    "splash_text": "#e8dec3",
+    "splash_dim": "#9aa0a8",
+    "toggle": "#454b54",
+    "toggle_active": "#59606b",
+    "toggle_selected": "#3a6db5",
+    "start": "#3f8f4f",
+    "warning": "#c25e00",
+    "muted": "#666666",
 }
 TILE_COLORS = {1: "#3a6db5", 2: "#b5432f"}
 SPENT_TILE_COLORS = {1: "#8ea7cc", 2: "#cc958b"}  # units that cannot act any more this phase
@@ -50,6 +71,10 @@ def unit_name(u: Unit) -> str:
 def describe(u: Unit) -> str:
     return (f"{unit_name(u)}: health {u.health}/{u.max_health}, attack {u.attack}, "
             f"defense {u.defense}, range {u.range}, movement {u.movement}, sight {u.sight}")
+
+
+def column_names(cols: tuple[int, ...]) -> str:
+    return " and ".join(COLUMN_LETTERS[c] for c in cols)
 
 
 def draw_tile(cv: tk.Canvas, cx: float, cy: float, s: float, unit: Unit, health: int,
@@ -78,21 +103,141 @@ def draw_tile(cv: tk.Canvas, cx: float, cy: float, s: float, unit: Unit, health:
 class App:
     def __init__(self, root: tk.Tk, seed: int | None = None):
         self.root = root
-        self.seed = seed
         root.title("Hex Battle")
-        root.minsize(980, 620)
+        root.minsize(1000, 640)
+        root.configure(bg=COLORS["board_bg"])
+        self.mode = tk.StringVar(value=HUMAN_VS_COMPUTER)
+        self.level = tk.StringVar(value="medium")
+        self.seed_text = tk.StringVar(value="" if seed is None else str(seed))
+        self.game: Game | None = None
+        self.splash = self._build_splash()
+        self.main = self._build_main()
+        self.show_splash()
 
-        self.canvas = tk.Canvas(root, width=1100, height=720, bg=COLORS["board_bg"],
+    # ----- start screen ------------------------------------------------------
+
+    def _build_splash(self) -> tk.Frame:
+        bg = COLORS["board_bg"]
+        frame = tk.Frame(self.root, bg=bg)
+        inner = tk.Frame(frame, bg=bg)
+        inner.place(relx=0.5, rely=0.5, anchor="center")
+        banner = tk.Canvas(inner, width=600, height=250, bg=bg, highlightthickness=0)
+        banner.pack()
+        self._draw_banner(banner)
+
+        toggle = dict(indicatoron=False, bg=COLORS["toggle"], fg="white",
+                      selectcolor=COLORS["toggle_selected"],
+                      activebackground=COLORS["toggle_active"], activeforeground="white",
+                      relief="flat", bd=0, highlightthickness=0, pady=8,
+                      font=("Helvetica", 12, "bold"))
+
+        def section(text: str) -> tk.Frame:
+            tk.Label(inner, text=text, bg=bg, fg=COLORS["splash_dim"],
+                     font=("Helvetica", 10, "bold")).pack(pady=(18, 6))
+            row = tk.Frame(inner, bg=bg)
+            row.pack()
+            return row
+
+        row = section("PLAYERS")
+        for value, text in ((HUMAN_VS_COMPUTER, "Human vs Computer"),
+                            (HUMAN_VS_HUMAN, "Human vs Human")):
+            tk.Radiobutton(row, text=text, variable=self.mode, value=value, width=20,
+                           command=self._update_splash, **toggle).pack(side=tk.LEFT, padx=6)
+
+        row = section("COMPUTER LEVEL")
+        self.level_buttons = []
+        for value in LEVELS:
+            b = tk.Radiobutton(row, text=value.capitalize(), variable=self.level, value=value,
+                               width=12, **toggle)
+            b.pack(side=tk.LEFT, padx=6)
+            self.level_buttons.append(b)
+        self.level_note = tk.Label(inner, bg=bg, fg=COLORS["splash_dim"], font=("Helvetica", 10))
+        self.level_note.pack(pady=(4, 0))
+
+        row = section("SEED")
+        entry = tk.Entry(row, textvariable=self.seed_text, width=12, font=("Helvetica", 12),
+                         justify="center", relief="flat")
+        entry.pack(side=tk.LEFT, padx=6)
+        entry.bind("<Return>", lambda e: self.start_from_splash())
+        tk.Label(inner, bg=bg, fg=COLORS["splash_dim"], font=("Helvetica", 10),
+                 text="Leave blank for new random units, or enter the seed of an "
+                      "earlier game to replay its units.").pack(pady=(4, 0))
+
+        tk.Button(inner, text="Start game", command=self.start_from_splash,
+                  bg=COLORS["start"], fg="white", activebackground="#4fa45f",
+                  activeforeground="white", relief="flat", bd=0, highlightthickness=0,
+                  font=("Helvetica", 14, "bold"), padx=30, pady=10).pack(pady=(26, 0))
+        return frame
+
+    def _draw_banner(self, cv: tk.Canvas) -> None:
+        cv.create_text(300, 48, text="HEX BATTLE", fill=COLORS["splash_text"],
+                       font=("Helvetica", 40, "bold"))
+        cv.create_text(300, 92, text="A turn-based war game in the fog of war",
+                       fill=COLORS["splash_dim"], font=("Helvetica", 12))
+        r = 42
+        samples = {
+            0: Unit(1, 1, 6, 3, 3, 0, 2, 1),
+            1: Unit(1, 2, 5, 2, 1, 3, 2, 2),
+            3: Unit(2, 3, 5, 2, 1, 3, 2, 2),
+            4: Unit(2, 4, 6, 3, 3, 0, 2, 1),
+        }
+        samples[1].health = 3
+        for i in range(5):
+            x = 300 + (i - 2) * 1.5 * r
+            y = 168 + (0 if i % 2 else r * SQRT3 / 2) - r * SQRT3 / 4
+            hot = i == 2
+            pts = [c for k in range(6) for c in (x + r * math.cos(math.pi / 3 * k),
+                                                  y + r * math.sin(math.pi / 3 * k))]
+            cv.create_polygon(pts, fill=COLORS["hot_visible"] if hot else COLORS["hex_visible"],
+                              outline=COLORS["hex_outline"])
+            if hot:
+                icons.radiation(cv, x, y, r * 1.1, COLORS["trefoil"], COLORS["hot_visible"])
+            else:
+                u = samples[i]
+                draw_tile(cv, x, y, r * 1.24, u, u.health, TILE_COLORS[u.owner])
+
+    def _update_splash(self) -> None:
+        hvh = self.mode.get() == HUMAN_VS_HUMAN
+        for b in self.level_buttons:
+            b.config(state=tk.DISABLED if hvh else tk.NORMAL)
+        self.level_note.config(text="Two players share this screen; no computer player."
+                               if hvh else "You play Blue; the computer plays Red.")
+
+    def show_splash(self) -> None:
+        self.main.pack_forget()
+        self._update_splash()
+        self.splash.pack(fill=tk.BOTH, expand=True)
+
+    def start_from_splash(self) -> None:
+        text = self.seed_text.get().strip()
+        if text and not text.isdigit():
+            messagebox.showerror("Seed", "The seed must be a whole number.", parent=self.root)
+            return
+        self.seed_text.set("")
+        self.splash.pack_forget()
+        self.main.pack(fill=tk.BOTH, expand=True)
+        self.new_game(int(text) if text else None)
+
+    # ----- main screen layout ------------------------------------------------
+
+    def _build_main(self) -> tk.Frame:
+        frame = tk.Frame(self.root)
+        self.canvas = tk.Canvas(frame, width=1100, height=720, bg=COLORS["board_bg"],
                                 highlightthickness=0)
-        side = tk.Frame(root, padx=10, pady=10)
+        side = tk.Frame(frame, padx=10, pady=10)
         side.pack(side=tk.RIGHT, fill=tk.Y)
         self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        self.status = tk.Label(side, font=("Helvetica", 14, "bold"), anchor="w",
-                               justify="left", wraplength=PANEL_WIDTH)
-        self.status.pack(fill=tk.X)
-        self.hint = tk.Label(side, anchor="w", justify="left", wraplength=PANEL_WIDTH)
-        self.hint.pack(fill=tk.X, pady=(4, 8))
+        def text_label(**kw) -> tk.Label:
+            lbl = tk.Label(side, anchor="w", justify="left", wraplength=PANEL_WIDTH, **kw)
+            lbl.pack(fill=tk.X)
+            return lbl
+
+        self.status = text_label(font=("Helvetica", 14, "bold"))
+        self.counts = text_label(font=("Helvetica", 11, "bold"))
+        self.radiation_label = text_label(font=("Helvetica", 10))
+        self.hint = text_label()
+        self.hint.pack_configure(pady=(4, 8))
         self.panel = tk.Canvas(side, width=PANEL_WIDTH, height=4 * (ROSTER_TILE + 10),
                                highlightthickness=0, bg=side.cget("bg"))
         self.panel.pack()
@@ -104,9 +249,7 @@ class App:
                                     command=self.on_action)
         self.random_btn.pack(side=tk.LEFT)
         self.action_btn.pack(side=tk.RIGHT)
-        self.info = tk.Label(side, anchor="w", justify="left", wraplength=PANEL_WIDTH,
-                             fg="#555555", height=3)
-        self.info.pack(fill=tk.X)
+        self.info = text_label(fg="#555555", height=3)
         log_frame = tk.Frame(side)
         log_frame.pack(fill=tk.BOTH, expand=True, pady=(6, 0))
         self.log_text = tk.Text(log_frame, width=38, height=10, wrap="word", state="disabled",
@@ -115,8 +258,12 @@ class App:
         self.log_text.configure(yscrollcommand=scroll.set)
         scroll.pack(side=tk.RIGHT, fill=tk.Y)
         self.log_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        self.new_btn = tk.Button(side, text="New game", command=self.on_new_game)
-        self.new_btn.pack(fill=tk.X, pady=(8, 0))
+        bottom = tk.Frame(side)
+        bottom.pack(fill=tk.X, pady=(8, 0))
+        self.seed_label = tk.Label(bottom, fg=COLORS["muted"])
+        self.seed_label.pack(side=tk.LEFT)
+        self.new_btn = tk.Button(bottom, text="New game", command=self.on_new_game)
+        self.new_btn.pack(side=tk.RIGHT)
 
         self.canvas.bind("<Configure>", lambda e: self.draw_board())
         self.canvas.bind("<Button-1>", self.on_board_click)
@@ -125,17 +272,21 @@ class App:
         self.canvas.bind("<Leave>", lambda e: self.info.config(text=""))
         self.panel.bind("<Button-1>", self.on_panel_click)
         self.panel.bind("<Motion>", self.on_panel_hover)
-
-        self.new_game()
+        return frame
 
     # ----- game lifecycle --------------------------------------------------
 
-    def new_game(self) -> None:
-        self.game = Game(seed=self.seed)
-        self.seed = None  # only the first game uses a fixed seed
-        self.ai = ComputerPlayer(COMPUTER, self.game.rng)
-        self.ai.place_units(self.game)  # done blind, before the human places
-        self.selected: Unit | None = self.game.units_of(HUMAN)[0]
+    def new_game(self, seed: int | None) -> None:
+        g = self.game = Game(seed=seed)
+        self.hot_seat = self.mode.get() == HUMAN_VS_HUMAN
+        self.humans = {1, 2} if self.hot_seat else {HUMAN}
+        self.ai = None
+        if not self.hot_seat:
+            self.ai = ComputerPlayer(COMPUTER, self.level.get(), g.rng)
+            self.ai.place_units(g)  # done blind, before the human places
+        self.viewer = 1  # whose view of the board is shown
+        self.handoff: int | None = None  # player the screen is being handed to
+        self.selected: Unit | None = g.units_of(self.viewer)[0]
         self.move_targets: dict[Hex, list[Hex]] = {}
         self.ranged_targets: list[Unit] = []
         self.busy = False  # True while animating or while the computer plays
@@ -143,63 +294,132 @@ class App:
         self.flash: Hex | None = None
         self.announced = False
         self.panel_hits: list[tuple[float, float, float, float, Unit]] = []
-        self.log_text.configure(state="normal")
-        self.log_text.delete("1.0", tk.END)
-        self.log_text.configure(state="disabled")
-        self.log("New game. Place your 10 units in the three left columns.")
+        self.logs: dict[int, list[str]] = {1: [], 2: []}
+        self.show_log()
+        self.post_all(f"New game, seed {g.seed}.")
+        if self.hot_seat:
+            self.post_all("Hot seat: Blue places first while Red looks away.")
+        else:
+            self.post(HUMAN, f"You are Blue against the {self.level.get()} computer. "
+                             "Place your 10 units in the three left columns.")
         self.refresh()
-
-    def log(self, msg: str) -> None:
-        self.log_text.configure(state="normal")
-        self.log_text.insert(tk.END, msg + "\n")
-        self.log_text.see(tk.END)
-        self.log_text.configure(state="disabled")
 
     def announce(self) -> None:
         if self.announced:
             return
         self.announced = True
-        winner = self.game.winner
-        text = {HUMAN: "You win!", COMPUTER: "The computer wins.", DRAW: "The game is a draw."}[winner]
-        self.log(text)
+        g = self.game
+        if g.winner == DRAW:
+            reason = ("both players passed a turn" if g.idle_turns >= IDLE_TURNS_FOR_DRAW
+                      else "the last units were destroyed together")
+            text = f"The game is a draw ({reason})."
+        elif self.hot_seat:
+            text = f"{PLAYER_NAMES[g.winner]} wins!"
+        else:
+            text = "You win!" if g.winner == HUMAN else "The computer wins."
+        self.post_all(text)
         self.refresh()
         messagebox.showinfo("Game over", text, parent=self.root)
+
+    def handoff_to(self, player: int) -> None:
+        """Hide the board until `player` is at the screen (hot seat only)."""
+        self.handoff = player
+        self.clear_selection()
+        self.show_log()
+        self.refresh()
+
+    def finish_handoff(self) -> None:
+        self.viewer = self.handoff
+        self.handoff = None
+        if self.game.phase is Phase.PLACEMENT:
+            self.selected = next((u for u in self.game.units_of(self.viewer) if u.pos is None),
+                                 None)
+        self.show_log()
+        self.refresh()
+
+    # ----- logs ------------------------------------------------------------
+
+    def post(self, player: int, msg: str) -> None:
+        """Add a line to one player's log."""
+        self.logs[player].append(msg)
+        if player == self.viewer and self.handoff is None:
+            self._append_log(msg)
+
+    def post_all(self, msg: str) -> None:
+        for p in (1, 2):
+            self.post(p, msg)
+
+    def _append_log(self, msg: str) -> None:
+        self.log_text.configure(state="normal")
+        self.log_text.insert(tk.END, msg + "\n")
+        self.log_text.see(tk.END)
+        self.log_text.configure(state="disabled")
+
+    def show_log(self) -> None:
+        self.log_text.configure(state="normal")
+        self.log_text.delete("1.0", tk.END)
+        self.log_text.configure(state="disabled")
+        if self.handoff is None:
+            for msg in self.logs[self.viewer]:
+                self._append_log(msg)
 
     # ----- buttons ---------------------------------------------------------
 
     def on_new_game(self) -> None:
-        if (self.game.phase is not Phase.PLACEMENT and not self.game.over
+        g = self.game
+        if (g.phase is not Phase.PLACEMENT and not g.over
                 and not messagebox.askyesno("New game", "Abandon the current game?",
                                             parent=self.root)):
             return
-        self.new_game()
+        self.show_splash()
 
     def on_random_placement(self) -> None:
-        self.game.auto_place(HUMAN)
+        if self.handoff is not None:
+            return
+        self.game.auto_place(self.viewer)
         self.selected = None
         self.refresh()
 
     def on_action(self) -> None:
         g = self.game
-        if self.busy or g.over:
+        if self.busy or g.over or self.handoff is not None:
             return
         self.clear_selection()
         if g.phase is Phase.PLACEMENT:
-            if g.placement_done(HUMAN):
-                g.start()
-                self.log("Battle begins. Fog of war is now in effect.")
-                self.log(f"Turn {g.turn}: your move.")
+            if not g.placement_done(self.viewer):
+                return
+            if self.hot_seat and self.viewer == 1:
+                self.post(1, "Your units are placed. Red places next.")
+                self.handoff_to(2)
+                return
+            g.start()
+            self.post_all("Battle begins. Fog of war is now in effect.")
+            if self.hot_seat:
+                self.post(1, f"--- Turn {g.turn}: Blue's move ---")
+                self.handoff_to(1)
+                return
+            self.post(HUMAN, f"Turn {g.turn}: your move.")
         elif g.phase is Phase.MOVEMENT:
             g.end_movement()
         elif g.phase is Phase.RANGED:
-            g.end_turn()
-            if g.over:
-                self.announce()
-                return
-            self.busy = True
-            self.log(f"Turn {g.turn}: computer's move.")
-            self.root.after(AI_PAUSE_MS, self.run_ai)
+            self.end_turn()
+            return
         self.refresh()
+
+    def end_turn(self) -> None:
+        g = self.game
+        self.log_radiation(g.end_turn())
+        if g.over:
+            self.refresh()
+            self.announce()
+        elif g.current in self.humans:
+            self.post(g.current, f"--- Turn {g.turn}: {PLAYER_NAMES[g.current]}'s move ---")
+            self.handoff_to(g.current)
+        else:
+            self.busy = True
+            self.post(HUMAN, f"Turn {g.turn}: computer's move.")
+            self.refresh()
+            self.root.after(AI_PAUSE_MS, self.run_ai)
 
     # ----- board geometry --------------------------------------------------
 
@@ -226,12 +446,12 @@ class App:
         best = min(ALL_HEXES, key=lambda h: math.dist((px, py), self.center(h)))
         return best if math.dist((px, py), self.center(best)) <= self.R * 0.9 else None
 
-    # ----- what the human sees ----------------------------------------------
+    # ----- what the viewer sees ----------------------------------------------
 
     def view_visible(self) -> set[Hex]:
         if self.override:
             return self.override["vis"]
-        return self.game.visible_hexes(HUMAN)
+        return self.game.visible_hexes(self.viewer)
 
     def view_units(self) -> list[tuple[Unit, Hex, int]]:
         """(unit, hex, health) for every unit on the board as currently displayed."""
@@ -248,10 +468,16 @@ class App:
                 return u
         return None
 
+    def my_turn(self) -> bool:
+        """Whether the person at the screen may act right now."""
+        g = self.game
+        return (g.current in self.humans and g.current == self.viewer
+                and self.handoff is None and not self.busy and not g.over)
+
     def tile_color(self, u: Unit) -> str:
         g = self.game
         spent = False
-        if u.owner == g.current == HUMAN and not self.busy:
+        if u.owner == g.current and self.my_turn():
             if g.phase is Phase.MOVEMENT:
                 spent = u.moved
             elif g.phase is Phase.RANGED:
@@ -262,37 +488,72 @@ class App:
 
     def refresh(self) -> None:
         g = self.game
+        you = PLAYER_NAMES[self.viewer]
+        n1, n2 = len(g.units_of(1)), len(g.units_of(2))
+        self.counts.config(text=f"Blue: {n1} unit{'s' * (n1 != 1)}     "
+                                f"Red: {n2} unit{'s' * (n2 != 1)}")
+        if g.radioactive_cols:
+            turns = g.radiation_countdown
+            self.radiation_label.config(
+                fg=COLORS["warning"],
+                text=f"☢ Columns {column_names(g.radioactive_cols)} are radioactive! "
+                     f"Destroyed after {turns} more turn{'s' * (turns != 1)}.")
+        elif g.phase in (Phase.MOVEMENT, Phase.RANGED):
+            self.radiation_label.config(
+                fg=COLORS["muted"],
+                text=f"Turns without combat: {g.quiet_turns} of {QUIET_TURNS_FOR_RADIATION}")
+        else:
+            self.radiation_label.config(text="")
+        self.seed_label.config(text=f"Seed: {g.seed}")
+
         if g.phase is Phase.PLACEMENT:
-            placed = sum(1 for u in g.units_of(HUMAN) if u.pos is not None)
-            status = "Setup"
-            hint = (f"{placed} of 10 units placed. Click a unit on the right, then a hex in "
-                    "the three left columns. Click a placed unit to move it; right-click it "
-                    "to take it back. The computer is placing its units out of sight.")
-            action, enabled = "Start battle", placed == 10
             self.random_btn.pack(side=tk.LEFT)
         else:
             self.random_btn.pack_forget()
-            if g.over:
-                status = {HUMAN: "You win!", COMPUTER: "The computer wins.",
-                          DRAW: "Draw."}[g.winner]
-                hint = "All units are now revealed. Click New game to play again."
-                action, enabled = "Game over", False
-            elif g.current == COMPUTER:
-                status = f"Turn {g.turn}: computer's move"
-                hint = "Watch the log for battles and attacks on your units."
-                action, enabled = "End turn", False
-            elif g.phase is Phase.MOVEMENT:
-                status = f"Turn {g.turn}: your movement"
-                hint = ("Click a unit, then a green hex to move or a red hex to attack. "
-                        "Each unit moves once. Click End movement when done.")
-                action, enabled = "End movement", True
+        enabled = False
+        if self.handoff is not None:
+            name = PLAYER_NAMES[self.handoff]
+            status = f"{name}'s turn"
+            hint = (f"Hand the screen to {name}. {PLAYER_NAMES[opponent(self.handoff)]}, "
+                    f"please look away. {name}: click the board when ready.")
+            action = "Waiting"
+            self.random_btn.pack_forget()
+        elif g.phase is Phase.PLACEMENT:
+            placed = sum(1 for u in g.units_of(self.viewer) if u.pos is not None)
+            status = f"Setup: {you}" if self.hot_seat else "Setup"
+            side = "left" if self.viewer == 1 else "right"
+            hint = (f"{placed} of 10 units placed. Click a unit on the right, then a hex in "
+                    f"the three {side} columns. Click a placed unit to move it; right-click "
+                    "it to take it back. Your opponent cannot see your setup.")
+            action = "Done placing" if self.hot_seat and self.viewer == 1 else "Start battle"
+            enabled = placed == len(g.units_of(self.viewer))
+        elif g.over:
+            if g.winner == DRAW:
+                status = "Draw."
+            elif self.hot_seat:
+                status = f"{PLAYER_NAMES[g.winner]} wins!"
             else:
-                ready = sum(1 for u in g.units_of(HUMAN) if g.ranged_targets(u))
-                status = f"Turn {g.turn}: ranged attacks"
-                hint = (f"{ready} unit(s) can fire. Click a unit, then a target outlined in "
-                        "red. There is no counter-attack. Click End turn when done."
-                        if ready else "No unit has a target in range. Click End turn.")
-                action, enabled = "End turn", True
+                status = "You win!" if g.winner == HUMAN else "The computer wins."
+            hint = "All units are now revealed. Click New game to play again."
+            action = "Game over"
+        elif g.current not in self.humans:
+            status = f"Turn {g.turn}: computer's move"
+            hint = "Watch the log for battles and attacks on your units."
+            action = "End turn"
+        elif g.phase is Phase.MOVEMENT:
+            status = (f"Turn {g.turn}: {you} moves" if self.hot_seat
+                      else f"Turn {g.turn}: your movement")
+            hint = ("Click a unit, then a green hex to move or a red hex to attack. "
+                    "Each unit moves once. Click End movement when done.")
+            action, enabled = "End movement", True
+        else:
+            ready = sum(1 for u in g.units_of(g.current) if g.ranged_targets(u))
+            status = (f"Turn {g.turn}: {you} fires" if self.hot_seat
+                      else f"Turn {g.turn}: ranged attacks")
+            hint = (f"{ready} unit(s) can fire. Click a unit, then a target outlined in "
+                    "red. There is no counter-attack. Click End turn when done."
+                    if ready else "No unit has a target in range. Click End turn.")
+            action, enabled = "End turn", True
         self.status.config(text=status)
         self.hint.config(text=hint)
         self.action_btn.config(text=action,
@@ -304,18 +565,33 @@ class App:
     def draw_board(self) -> None:
         cv = self.canvas
         cv.delete("all")
+        if self.game is None:
+            return
         self.layout()
+        if self.handoff is not None:
+            self.draw_handoff()
+            return
         R = self.R
+        g = self.game
         vis = self.view_visible()
         targets = {} if self.override else self.move_targets
         label_font = ("Helvetica", -max(8, round(R * 0.16)))
         for h in ALL_HEXES:
             x, y = self.center(h)
+            if not g.on_board(h):
+                cv.create_polygon(self.hex_points(h), fill=COLORS["hex_void"],
+                                  outline=COLORS["hex_void_outline"])
+                continue
+            hot = h[0] in g.radioactive_cols
             if h in targets:
-                fill = COLORS["attack"] if self.game.unit_at(h) else COLORS["move"]
+                fill = COLORS["attack"] if g.unit_at(h) else COLORS["move"]
+            elif hot:
+                fill = COLORS["hot_visible"] if h in vis else COLORS["hot_fog"]
             else:
                 fill = COLORS["hex_visible"] if h in vis else COLORS["hex_fog"]
             cv.create_polygon(self.hex_points(h), fill=fill, outline=COLORS["hex_outline"])
+            if hot:
+                icons.radiation(cv, x, y, R * 1.1, COLORS["trefoil"], fill)
             cv.create_text(x, y - R * 0.745, text=label(h), font=label_font,
                            fill=COLORS["label_visible"] if h in vis else COLORS["label_fog"])
         for u, pos, hp in self.view_units():
@@ -335,16 +611,29 @@ class App:
             cv.create_polygon(self.hex_points(self.flash, 0.94), fill="",
                               outline=COLORS["flash"], width=7)
 
+    def draw_handoff(self) -> None:
+        cv = self.canvas
+        w, h = cv.winfo_width(), cv.winfo_height()
+        name = PLAYER_NAMES[self.handoff]
+        other = PLAYER_NAMES[opponent(self.handoff)]
+        cv.create_text(w / 2, h / 2 - 50, text=f"{name}'s turn", fill=TILE_COLORS[self.handoff],
+                       font=("Helvetica", 40, "bold"))
+        cv.create_text(w / 2, h / 2 + 20, fill=COLORS["splash_text"], justify="center",
+                       font=("Helvetica", 15),
+                       text=f"{other}, please look away.\n{name}, click anywhere when ready.")
+
     def draw_panel(self) -> None:
         p = self.panel
         p.delete("all")
         self.panel_hits = []
+        if self.handoff is not None:
+            return
         if self.game.phase is Phase.PLACEMENT:
-            unplaced = [u for u in self.game.units_of(HUMAN) if u.pos is None]
+            unplaced = [u for u in self.game.units_of(self.viewer) if u.pos is None]
             if not unplaced:
                 p.create_text(PANEL_WIDTH / 2, 40, width=PANEL_WIDTH - 20,
-                              text="All units placed.\nClick Start battle.",
-                              font=("Helvetica", 12), justify="center")
+                              text="All units placed.", font=("Helvetica", 12),
+                              justify="center")
             step = ROSTER_TILE + 12
             for i, u in enumerate(unplaced):
                 row, col = divmod(i, 3)
@@ -354,7 +643,7 @@ class App:
                     p.create_rectangle(cx - step / 2 + 1, cy - step / 2 + 3,
                                        cx + step / 2 - 1, cy + step / 2 - 3,
                                        fill=COLORS["selected"], outline="")
-                draw_tile(p, cx, cy, ROSTER_TILE, u, u.health, TILE_COLORS[HUMAN])
+                draw_tile(p, cx, cy, ROSTER_TILE, u, u.health, TILE_COLORS[self.viewer])
                 h = ROSTER_TILE / 2
                 self.panel_hits.append((cx - h, cy - h, cx + h, cy + h, u))
             return
@@ -367,9 +656,12 @@ class App:
             (lambda x, y: self._swatch(x, y, COLORS["attack"]), "Enemy it can attack (battle)"),
             (lambda x, y: self._swatch(x, y, "", COLORS["target"]), "Ranged target"),
             (lambda x, y: self._swatch(x, y, COLORS["hex_fog"]), "Fog of war"),
+            (lambda x, y: (self._swatch(x, y, COLORS["hot_visible"]),
+                           icons.radiation(p, x, y, 16, COLORS["trefoil"], COLORS["hot_visible"])),
+             "Radioactive: soon destroyed"),
         ]
         for i, (draw, text) in enumerate(rows):
-            y = 16 + i * 30
+            y = 14 + i * 27
             draw(20, y)
             p.create_text(44, y, text=text, anchor="w", font=("Helvetica", 11))
 
@@ -386,12 +678,15 @@ class App:
 
     def on_board_click(self, event) -> None:
         g = self.game
+        if self.handoff is not None:
+            self.finish_handoff()
+            return
         if self.busy or g.over:
             return
         h = self.hex_at(event.x, event.y)
         if g.phase is Phase.PLACEMENT:
             self.click_placement(h)
-        elif g.current != HUMAN:
+        elif not self.my_turn():
             return
         elif g.phase is Phase.MOVEMENT:
             self.click_movement(h)
@@ -401,12 +696,12 @@ class App:
     def click_placement(self, h: Hex | None) -> None:
         g = self.game
         unit = g.unit_at(h) if h else None
-        if unit is not None and unit.owner == HUMAN:
+        if unit is not None and unit.owner == self.viewer:
             self.selected = None if unit is self.selected else unit
         elif h is not None and self.selected is not None and g.can_place(self.selected, h):
             from_roster = self.selected.pos is None
             g.place(self.selected, h)
-            unplaced = [u for u in g.units_of(HUMAN) if u.pos is None]
+            unplaced = [u for u in g.units_of(self.viewer) if u.pos is None]
             self.selected = unplaced[0] if from_roster and unplaced else None
         else:
             self.selected = None
@@ -414,11 +709,11 @@ class App:
 
     def on_board_right_click(self, event) -> None:
         g = self.game
-        if g.phase is not Phase.PLACEMENT:
+        if g.phase is not Phase.PLACEMENT or self.handoff is not None:
             return
         h = self.hex_at(event.x, event.y)
         unit = g.unit_at(h) if h else None
-        if unit is not None and unit.owner == HUMAN:
+        if unit is not None and unit.owner == self.viewer:
             g.unplace(unit)
             self.selected = unit
             self.refresh()
@@ -431,7 +726,8 @@ class App:
             self.do_move(unit, h, self.human_done)
             return
         unit = g.unit_at(h) if h else None
-        if unit is not None and unit.owner == HUMAN and not unit.moved and unit is not self.selected:
+        if (unit is not None and unit.owner == g.current and not unit.moved
+                and unit is not self.selected):
             self.selected = unit
             self.move_targets = g.legal_moves(unit)
         else:
@@ -449,7 +745,7 @@ class App:
             self.busy = True
             self.after_event(result.hex, self.human_done)
             return
-        if unit is not None and unit.owner == HUMAN and unit is not self.selected:
+        if unit is not None and unit.owner == g.current and unit is not self.selected:
             targets = g.ranged_targets(unit)
             self.clear_selection()
             if targets:
@@ -461,10 +757,12 @@ class App:
 
     def on_board_hover(self, event) -> None:
         h = self.hex_at(event.x, event.y)
-        if h is None:
+        if h is None or self.handoff is not None or not self.game.on_board(h):
             self.info.config(text="")
             return
         text = label(h) + ("" if h in self.view_visible() else " (fog of war)")
+        if h[0] in self.game.radioactive_cols:
+            text += " ☢ radioactive"
         unit = self.unit_shown_at(h)
         if unit is not None:
             text += "\n" + describe(unit)
@@ -495,22 +793,23 @@ class App:
             self.announce()
 
     def do_move(self, unit: Unit, dest: Hex, then) -> None:
-        """Make the move, animate it as the human would see it, then call `then`."""
+        """Make the move, animate it as the viewer would see it, then call `then`."""
         g = self.game
         before_units = self.view_units()
-        before_vis = set(g.visible_hexes(HUMAN))
+        before_vis = {p: set(g.visible_hexes(p)) for p in (1, 2)}
         start = unit.pos
         result = g.move(unit, dest)
         walk = [start] + [h for h in result.path
                           if not (result.battle and h == result.battle.hex)]
+        shown = before_vis[self.viewer]
         self.busy = True
-        self.override = {"units": before_units, "vis": before_vis, "anim": unit, "pos": start}
+        self.override = {"units": before_units, "vis": shown, "anim": unit, "pos": start}
 
         def step(i: int) -> None:
             if i < len(walk):
                 self.override["pos"] = walk[i]
                 self.draw_board()
-                self.root.after(STEP_MS if walk[i] in before_vis else 0, step, i + 1)
+                self.root.after(STEP_MS if walk[i] in shown else 0, step, i + 1)
             else:
                 self.override = None
                 self.log_move(result, before_vis)
@@ -551,55 +850,76 @@ class App:
             self.log_ranged(result)
             self.after_event(result.hex, self.ai_continue)
         else:
-            g.end_turn()
+            self.log_radiation(g.end_turn())
             self.busy = False
             if g.over:
+                self.refresh()
                 self.announce()
             else:
-                self.log(f"Turn {g.turn}: your move.")
+                self.post(HUMAN, f"Turn {g.turn}: your move.")
                 self.refresh()
 
     def ai_continue(self) -> None:
         self.root.after(AI_PAUSE_MS, self.run_ai)
 
     # ----- log messages ----------------------------------------------------
+    # Each player's log only reports what that player could know.
 
-    def log_move(self, result: MoveResult, before_vis: set[Hex]) -> None:
+    def log_move(self, result: MoveResult, before_vis: dict[int, set[Hex]]) -> None:
         u = result.unit
         if result.battle:
             self.log_battle(result)
             return
         end = u.pos
-        if u.owner == HUMAN:
-            msg = f"{unit_name(u)} moved {label(result.start)} → {label(end)}."
-            if result.stopped_early:
-                msg += " Enemies hidden in the fog pinned it and it had to stop."
-            self.log(msg)
-        elif end in self.game.visible_hexes(HUMAN):
-            origin = label(result.start) if result.start in before_vis else "the fog"
-            self.log(f"{unit_name(u)} moved from {origin} to {label(end)}.")
+        msg = f"{unit_name(u)} moved {label(result.start)} → {label(end)}."
+        if result.stopped_early:
+            msg += " Enemies hidden in the fog pinned it and it had to stop."
+        self.post(u.owner, msg)
+        enemy = opponent(u.owner)
+        if end in self.game.visible_hexes(enemy):
+            origin = label(result.start) if result.start in before_vis[enemy] else "the fog"
+            self.post(enemy, f"{unit_name(u)} moved from {origin} to {label(end)}.")
 
     def log_battle(self, result: MoveResult) -> None:
         b = result.battle
         a, d = b.attacker, b.defender
         rounds = ", ".join(f"{x}-{y}" for x, y in b.rounds)
-        self.log(f"Battle at {label(b.hex)}: {unit_name(a)} attacked {unit_name(d)}. "
-                 f"Damage per round (dealt-taken): {rounds}.")
+        self.post_all(f"Battle at {label(b.hex)}: {unit_name(a)} attacked {unit_name(d)}. "
+                      f"Damage per round (dealt-taken): {rounds}.")
         if not a.alive and not d.alive:
-            self.log("  Both units were destroyed.")
+            self.post_all("  Both units were destroyed.")
         elif a.alive:
-            self.log(f"  {unit_name(d)} destroyed. {unit_name(a)} takes {label(b.hex)} "
-                     f"with {a.health} health.")
+            self.post_all(f"  {unit_name(d)} destroyed. {unit_name(a)} takes {label(b.hex)} "
+                          f"with {a.health} health.")
         else:
-            self.log(f"  {unit_name(a)} destroyed. {unit_name(d)} holds {label(b.hex)} "
-                     f"with {d.health} health.")
+            self.post_all(f"  {unit_name(a)} destroyed. {unit_name(d)} holds {label(b.hex)} "
+                          f"with {d.health} health.")
 
     def log_ranged(self, r: RangedResult) -> None:
         a, t = r.attacker, r.target
-        if a.owner == HUMAN or a.pos in self.game.visible_hexes(HUMAN):
-            shooter = f"{unit_name(a)} at {label(a.pos)}"
-        else:
-            shooter = f"A hidden {PLAYER_NAMES[a.owner]} unit"
         outcome = "destroyed!" if r.killed else f"{t.health} health left."
-        self.log(f"{shooter} fired at {unit_name(t)} at {label(r.hex)}: "
-                 f"{r.damage} damage, {outcome}")
+        for p in (1, 2):
+            if a.owner == p or a.pos in self.game.visible_hexes(p):
+                shooter = f"{unit_name(a)} at {label(a.pos)}"
+            else:
+                shooter = f"A hidden {PLAYER_NAMES[a.owner]} unit"
+            self.post(p, f"{shooter} fired at {unit_name(t)} at {label(r.hex)}: "
+                         f"{r.damage} damage, {outcome}")
+
+    def log_radiation(self, events: list[RadiationEvent]) -> None:
+        for e in events:
+            cols = column_names(e.columns)
+            if e.kind == "warning":
+                self.post_all(f"☢ {QUIET_TURNS_FOR_RADIATION} turns without combat: "
+                              f"columns {cols} are now radioactive! They and any units on "
+                              "them will be destroyed in 2 turns.")
+                continue
+            for p in (1, 2):
+                msg = f"☢ Columns {cols} were destroyed."
+                mine = [unit_name(u) for u in e.casualties if u.owner == p]
+                theirs = sum(1 for u in e.casualties if u.owner != p)
+                if mine:
+                    msg += f" Lost: {', '.join(mine)}."
+                if theirs:
+                    msg += f" {theirs} enemy unit{'s' * (theirs != 1)} destroyed there."
+                self.post(p, msg)

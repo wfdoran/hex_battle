@@ -2,7 +2,7 @@ import random
 import unittest
 
 from hexbattle.ai import ComputerPlayer
-from hexbattle.game import DRAW, Game, Phase, RuleError
+from hexbattle.game import DRAW, QUIET_TURNS_FOR_RADIATION, Game, Phase, RuleError
 from hexbattle.grid import ALL_HEXES, hexes_within, neighbors
 
 
@@ -207,28 +207,109 @@ class TurnTest(unittest.TestCase):
 
 
 class ComputerTest(unittest.TestCase):
-    def test_ai_games_finish_legally(self):
-        finished = 0
-        for seed in range(6):
-            g = Game(seed=seed)
-            players = {p: ComputerPlayer(p, random.Random(seed * 10 + p), trials=40) for p in (1, 2)}
-            for p in (1, 2):
-                players[p].place_units(g)
-            g.start()
-            for _ in range(5000):
-                if g.over:
-                    break
-                action = players[g.current].next_action(g)
-                if action.kind == "move":
-                    g.move(action.unit, action.target)
-                elif action.kind == "end_movement":
-                    g.end_movement()
-                elif action.kind == "ranged":
-                    g.ranged_attack(action.unit, action.target)
-                else:
-                    g.end_turn()
-            finished += g.over
-        self.assertGreaterEqual(finished, 4)
+    def play(self, seed, level1, level2):
+        g = Game(seed=seed)
+        players = {1: ComputerPlayer(1, level1, random.Random(seed * 10 + 1)),
+                   2: ComputerPlayer(2, level2, random.Random(seed * 10 + 2))}
+        for p in (1, 2):
+            players[p].place_units(g)
+        g.start()
+        for _ in range(20000):
+            if g.over:
+                break
+            action = players[g.current].next_action(g)
+            if action.kind == "move":
+                g.move(action.unit, action.target)
+            elif action.kind == "end_movement":
+                g.end_movement()
+            elif action.kind == "ranged":
+                g.ranged_attack(action.unit, action.target)
+            else:
+                g.end_turn()
+        return g
+
+    def test_every_level_plays_legal_games(self):
+        # Any illegal action would raise RuleError.
+        for seed, (l1, l2) in enumerate([("easy", "medium"), ("medium", "hard"),
+                                         ("hard", "easy"), ("easy", "easy"),
+                                         ("medium", "medium"), ("hard", "hard")]):
+            self.assertTrue(self.play(seed, l1, l2).over, (l1, l2))
+
+    def test_unknown_level(self):
+        with self.assertRaises(ValueError):
+            ComputerPlayer(1, "impossible")
+
+
+class RadiationTest(unittest.TestCase):
+    """Blue and Red each walk one unit back and forth in mid-board (so the
+    game is never idle) while other units sit on the edge columns."""
+
+    STILL = (5, 1, 1, 0, 1, 1)
+
+    def setUp(self):
+        self.g, units = make_game(
+            [((4, 6), (5, 1, 1, 3, 1, 4)), ((0, 4), self.STILL)],
+            [((6, 6), (8, 1, 5, 0, 1, 1)), ((10, 6), self.STILL)])
+        self.walkers = {1: units[(4, 6)], 2: units[(6, 6)]}
+        self.doomed = {units[(0, 4)], units[(10, 6)]}
+
+    def walk(self):
+        """Play a turn with no combat: the current walker steps down or back up."""
+        g = self.g
+        u = self.walkers[g.current]
+        g.move(u, (u.pos[0], u.pos[1] + (2 if u.pos[1] == 6 else -2)))
+        g.end_movement()
+        return g.end_turn()
+
+    def test_columns_become_radioactive_then_vanish(self):
+        g = self.g
+        for _ in range(QUIET_TURNS_FOR_RADIATION - 1):
+            self.assertEqual(self.walk(), [])
+        events = self.walk()
+        self.assertEqual([e.kind for e in events], ["warning"])
+        self.assertEqual(events[0].columns, (0, 10))
+        self.assertEqual(g.radioactive_cols, (0, 10))
+        self.assertEqual(self.walk(), [])
+        events = self.walk()
+        self.assertEqual([e.kind for e in events], ["destroyed"])
+        self.assertEqual(set(events[0].casualties), self.doomed)
+        self.assertEqual((g.first_col, g.last_col), (1, 9))
+        self.assertEqual((g.radioactive_cols, g.quiet_turns), ((), 0))
+        self.assertFalse(any(h[0] in (0, 10) for h in g.visible_hexes(1)))
+        self.assertFalse(g.over)
+        # The clock restarts: the next two columns go after another quiet spell.
+        for _ in range(QUIET_TURNS_FOR_RADIATION):
+            self.walk()
+        self.assertEqual(g.radioactive_cols, (1, 9))
+
+    def test_combat_resets_the_clock(self):
+        g = self.g
+        for _ in range(QUIET_TURNS_FOR_RADIATION - 2):
+            self.walk()
+        self.assertEqual(g.current, 1)
+        archer, red = self.walkers[1], self.walkers[2]
+        g.end_movement()
+        g.ranged_attack(archer, red)  # counts as combat even if it misses
+        g.end_turn()
+        self.assertEqual(g.quiet_turns, 0)
+
+    def test_last_column_destroys_everyone(self):
+        g = self.g
+        g.first_col = g.last_col = 5
+        for u in g.units:
+            if u.alive:
+                g.board.pop(u.pos)
+        for u, h in zip([self.walkers[1], self.walkers[2]], [(5, 5), (5, 9)]):
+            u.pos = h
+            g.board[h] = u
+        for u in self.doomed:
+            u.health, u.pos = 0, None
+        g.radioactive_cols, g.radiation_countdown = (5,), 1
+        g.end_movement()
+        events = g.end_turn()
+        self.assertEqual(events[0].columns, (5,))
+        self.assertTrue(g.over)
+        self.assertEqual(g.winner, DRAW)
 
 
 if __name__ == "__main__":

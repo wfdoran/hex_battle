@@ -12,8 +12,8 @@ To start the game, run `python3 -m hexbattle` from the `src` directory. See
   the computer's level:
   - **Easy** plays loosely and leaves some units idle.
   - **Medium** works out battle odds and only attacks when it expects to win.
-  - **Hard** also avoids danger, surrounds enemies to pin them, and focuses
-    its fire.
+  - **Hard** also avoids danger, surrounds enemies to cut off their retreat,
+    and focuses its fire.
 
   For now, the computer knows where your units are, even in the fog, but it
   must obey the same movement and attack rules as you.
@@ -83,13 +83,16 @@ Blue moves first. Each turn has two phases.
 - Every hex on the path must be visible when the move starts. A unit cannot
   move into or through your own units. It cannot move *through* an enemy,
   but it can move *onto* an enemy, which starts a battle (see below).
-- **Pinned units:** if a unit starts on, or reaches, a hex next to **two or
-  more** enemy units, it can move no further except to attack one of those
-  neighbors. If one of your other units destroys one of those enemies, the
-  unit may be free to move again.
+- **Zone of control:** every hex next to an enemy unit is in that enemy's
+  zone of control. A unit may not step from one hex in an enemy zone of
+  control to another, even if a different enemy is next to each. Attacking
+  is always allowed. So a unit next to an enemy can attack, or retreat to a
+  hex that isn't next to any enemy, but it can't slide along the enemy line
+  or slip past it. A unit that steps away can step back in later on the same
+  move, as long as each step follows the rule.
 - **Ambush:** a path is planned using only the enemies you can see. If an
-  enemy hidden in the fog turns out to pin your unit partway along the path,
-  the unit stops there. The log reports when this happens.
+  enemy hidden in the fog turns out to make a step break the zone-of-control
+  rule, the unit stops before that step. The log reports when this happens.
 - Moving changes what you can see, so moves that were available to other
   units may no longer be, and new ones may open up.
 - Click **End movement** when you are done.
@@ -105,7 +108,9 @@ Blue moves first. Each turn has two phases.
 - A ranged attack is a single attack, and the target does not fire back.
 - Click **End turn** when you are done. The other side then plays its turn.
   In a hot-seat game, a hand-off screen comes up first. The next player
-  clicks it when the other player has looked away.
+  clicks it when the other player has looked away. If any of their units
+  were destroyed since their last turn, a pop-up lists them and how they
+  were lost.
 
 ## Combat
 

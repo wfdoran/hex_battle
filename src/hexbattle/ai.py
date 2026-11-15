@@ -10,8 +10,8 @@ go and what they can shoot.
           come out ahead; melee units close in, ranged units keep their
           distance.
 - hard:   medium, plus it accounts for enemies that can reach a hex next
-          turn, seeks out fights it can win, pins enemies by surrounding
-          them, positions ranged units where they can actually see and shoot
+          turn, seeks out fights it can win, surrounds enemies to cut off
+          their retreat, positions ranged units where they can actually see and shoot
           a target, and focuses fire on enemies it can finish off.
 
 Every level steers clear of radioactive columns.
@@ -38,7 +38,7 @@ RADIATION_PENALTY = 20.0
 HARD_DANGER = 0.6  # expected loss from enemies that can reach the hex next turn
 HARD_APPROACH = 0.7  # pull toward enemies, per hex of distance
 HARD_APPETITE = 3.0  # extra pull toward enemies the unit is likely to beat
-HARD_PIN = 0.15  # bonus for helping surround (pin) an enemy, times its value
+HARD_PIN = 0.15  # bonus for helping surround an enemy, times its value
 
 
 @dataclass(frozen=True)
@@ -225,7 +225,8 @@ class ComputerPlayer:
                                               e.health, e.attack, e.defense)
                 return HARD_APPROACH * d - HARD_APPETITE * (win - lose)
             score -= min(appeal(e, d) for e, d in zip(enemies, dists))
-        # Standing next to an enemy that another friendly unit already touches pins it.
+        # Standing next to an enemy that another friendly unit already touches
+        # narrows where zone of control lets it retreat to.
         friends = {f.pos for f in game.units_of(self.player) if f is not u}
         for e, d in zip(enemies, dists):
             if d == 1 and any(n in friends for n in neighbors(e.pos)):

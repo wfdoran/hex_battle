@@ -49,7 +49,7 @@ class MoveResult:
     unit: Unit
     start: Hex
     planned: list[Hex]  # the path the player chose, excluding the start
-    path: list[Hex]  # the hexes actually entered (shorter if the unit was pinned)
+    path: list[Hex]  # the hexes actually entered (shorter if a hidden enemy stopped it)
     battle: BattleResult | None
 
     @property
@@ -189,9 +189,11 @@ class Game:
     def legal_moves(self, unit: Unit) -> dict[Hex, list[Hex]]:
         """Map each hex the unit may move to onto the path it would take.
 
-        Only what the owner can see is used: every hex on the path must be
-        visible, and the "two adjacent enemies" rule counts visible enemies.
-        Enemies hidden in fog can still stop the unit; see move().
+        Zone of control: a unit may not step from a hex next to an enemy to
+        another hex next to an enemy, though it may always attack.  Only what
+        the owner can see is used: every hex on the path must be visible, and
+        zone of control counts visible enemies.  Enemies hidden in fog can
+        still stop the unit; see move().
         """
         if (self.phase is not Phase.MOVEMENT or unit.owner != self.current
                 or not unit.alive or unit.moved):
@@ -203,13 +205,13 @@ class Game:
         for _ in range(unit.movement):
             next_frontier = []
             for h in frontier:
-                pinned = self._adjacent_enemies(h, unit.owner, vis) >= 2
+                in_zoc = self._adjacent_enemies(h, unit.owner, vis) > 0
                 for n in neighbors(h):
                     if n in paths or n not in vis:
                         continue
                     occ = self.board.get(n)
                     if occ is None:
-                        if pinned:
+                        if in_zoc and self._adjacent_enemies(n, unit.owner, vis) > 0:
                             continue
                         paths[n] = paths[h] + [n]
                         next_frontier.append(n)
@@ -237,8 +239,9 @@ class Game:
                 battle = self._battle(unit, enemy, step)
                 self.fought = True
                 break
-            # An enemy hidden in the fog may pin the unit partway along its path.
-            if self._adjacent_enemies(here, unit.owner) >= 2:
+            # An enemy hidden in the fog may put the step in a zone of control.
+            if (self._adjacent_enemies(here, unit.owner) > 0
+                    and self._adjacent_enemies(step, unit.owner) > 0):
                 break
             here = step
             taken.append(step)

@@ -91,25 +91,39 @@ class MovementTest(unittest.TestCase):
         for dest, path in moves.items():
             self.assertNotIn((5, 7), path[:-1])
 
-    def test_pinned_at_start(self):
-        g, units = make_game([((4, 6), (5, 1, 1, 0, 3, 5))],
-                             [((5, 5), (5, 1, 1, 0, 1, 1)), ((5, 7), (5, 1, 1, 0, 1, 1))])
-        self.assertEqual(set(g.legal_moves(units[(4, 6)])), {(5, 5), (5, 7)})
+    def test_zone_of_control_at_start(self):
+        # Next to an enemy: the unit may attack or step away, but not slide
+        # to (4, 8) or (5, 5), which are also next to the enemy.
+        g, units = make_game([((4, 6), (5, 1, 1, 0, 1, 5))], [((5, 7), (5, 1, 1, 0, 1, 1))])
+        self.assertEqual(set(g.legal_moves(units[(4, 6)])), {(5, 7), (4, 4), (3, 5), (3, 7)})
 
-    def test_pinned_along_path(self):
+    def test_retreat(self):
+        g, units = make_game([((4, 6), (5, 1, 1, 0, 3, 5))], [((5, 7), (5, 1, 1, 0, 1, 1))])
+        unit = units[(4, 6)]
+        self.assertIn((2, 2), g.legal_moves(unit))
+        result = g.move(unit, (2, 2))
+        self.assertFalse(result.stopped_early)
+        self.assertEqual(unit.pos, (2, 2))
+
+    def test_zone_of_control_along_path(self):
         g, units = make_game([((2, 6), (5, 1, 1, 0, 4, 5))],
-                             [((4, 4), (5, 1, 1, 0, 1, 1)), ((4, 8), (5, 1, 1, 0, 1, 1))])
+                             [((5, 5), (5, 1, 1, 0, 1, 1)), ((5, 9), (5, 1, 1, 0, 1, 1))])
         vis = g.visible_hexes(1)
-        for dest, path in g.legal_moves(units[(2, 6)]).items():
-            for h in path[:-1]:
-                self.assertLess(g._adjacent_enemies(h, 1, vis), 2, (dest, path))
+        moves = g.legal_moves(units[(2, 6)])
+        self.assertIn((4, 8), moves)  # approaching an enemy is allowed
+        self.assertIn((5, 5), moves)  # and so is attacking one
+        for dest, path in moves.items():
+            steps = [(2, 6)] + path
+            for a, b in zip(steps, steps[1:]):
+                if g.unit_at(b) is None:
+                    self.assertFalse(g._adjacent_enemies(a, 1, vis) and g._adjacent_enemies(b, 1, vis),
+                                     (dest, path))
 
     def test_hidden_enemy_stops_move(self):
         mover = ((2, 6), (5, 1, 1, 0, 2, 1))
-        spotter = ((2, 10), (5, 1, 1, 0, 1, 1))  # lets the mover see (3, 9)
-        seen = ((2, 8), (5, 1, 1, 0, 1, 1))
-        hidden = ((4, 8), (5, 1, 1, 0, 1, 1))  # next to (3, 7) but in fog
-        g, units = make_game([mover, spotter], [seen, hidden])
+        spotter = ((2, 8), (5, 1, 1, 0, 1, 1))  # lets the mover see (3, 9)
+        hidden = ((4, 8), (5, 1, 1, 0, 1, 1))  # next to (3, 7) and (3, 9) but in fog
+        g, units = make_game([mover, spotter], [hidden])
         unit = units[(2, 6)]
         self.assertNotIn((4, 8), g.visible_hexes(1))
         self.assertEqual(g.legal_moves(unit)[(3, 9)], [(3, 7), (3, 9)])

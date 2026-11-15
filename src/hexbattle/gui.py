@@ -295,6 +295,10 @@ class App:
         self.announced = False
         self.panel_hits: list[tuple[float, float, float, float, Unit]] = []
         self.logs: dict[int, list[str]] = {1: [], 2: []}
+        # For the hot-seat loss summary: how each destroyed unit was lost, as
+        # its owner would describe it, and each player's units as they last saw them.
+        self.losses: dict[Unit, str] = {}
+        self.last_seen_alive: dict[int, set[Unit]] = {1: set(), 2: set()}
         self.show_log()
         self.post_all(f"New game, seed {g.seed}.")
         if self.hot_seat:
@@ -336,6 +340,19 @@ class App:
                                  None)
         self.show_log()
         self.refresh()
+        self.report_losses()
+
+    def report_losses(self) -> None:
+        """Tell the player which of their units were lost since their last turn."""
+        lost = [u for u in self.last_seen_alive[self.viewer] if not u.alive]
+        if not lost:
+            return
+        lost.sort(key=lambda u: u.kind)
+        self.last_seen_alive[self.viewer] -= set(lost)
+        count = f"{len(lost)} of your units" if len(lost) > 1 else "one of your units"
+        lines = [f"Since your last turn you lost {count}:", ""]
+        lines += [f"• {unit_name(u)} {self.losses.get(u, 'was destroyed')}" for u in lost]
+        messagebox.showwarning("Units lost", "\n".join(lines), parent=self.root)
 
     # ----- logs ------------------------------------------------------------
 
@@ -393,6 +410,7 @@ class App:
                 self.handoff_to(2)
                 return
             g.start()
+            self.last_seen_alive = {p: set(g.units_of(p)) for p in (1, 2)}
             self.post_all("Battle begins. Fog of war is now in effect.")
             if self.hot_seat:
                 self.post(1, f"--- Turn {g.turn}: Blue's move ---")
@@ -408,6 +426,7 @@ class App:
 
     def end_turn(self) -> None:
         g = self.game
+        self.last_seen_alive[g.current] = set(g.units_of(g.current))
         self.log_radiation(g.end_turn())
         if g.over:
             self.refresh()
@@ -873,7 +892,7 @@ class App:
         end = u.pos
         msg = f"{unit_name(u)} moved {label(result.start)} → {label(end)}."
         if result.stopped_early:
-            msg += " Enemies hidden in the fog pinned it and it had to stop."
+            msg += " An enemy hidden in the fog had it in its zone of control, so it had to stop."
         self.post(u.owner, msg)
         enemy = opponent(u.owner)
         if end in self.game.visible_hexes(enemy):
@@ -886,6 +905,11 @@ class App:
         rounds = ", ".join(f"{x}-{y}" for x, y in b.rounds)
         self.post_all(f"Battle at {label(b.hex)}: {unit_name(a)} attacked {unit_name(d)}. "
                       f"Damage per round (dealt-taken): {rounds}.")
+        where = label(b.hex)
+        if not a.alive:
+            self.losses[a] = f"was destroyed attacking {unit_name(d)} at {where}."
+        if not d.alive:
+            self.losses[d] = f"was destroyed at {where}, attacked by {unit_name(a)}."
         if not a.alive and not d.alive:
             self.post_all("  Both units were destroyed.")
         elif a.alive:
@@ -905,6 +929,9 @@ class App:
                 shooter = f"A hidden {PLAYER_NAMES[a.owner]} unit"
             self.post(p, f"{shooter} fired at {unit_name(t)} at {label(r.hex)}: "
                          f"{r.damage} damage, {outcome}")
+            if r.killed and t.owner == p:
+                by = shooter.replace("A hidden", "a hidden")
+                self.losses[t] = f"was shot at {label(r.hex)} by {by}."
 
     def log_radiation(self, events: list[RadiationEvent]) -> None:
         for e in events:
@@ -914,6 +941,8 @@ class App:
                               f"columns {cols} are now radioactive! They and any units on "
                               "them will be destroyed in 2 turns.")
                 continue
+            for u in e.casualties:
+                self.losses[u] = f"was destroyed by radiation in columns {cols}."
             for p in (1, 2):
                 msg = f"☢ Columns {cols} were destroyed."
                 mine = [unit_name(u) for u in e.casualties if u.owner == p]

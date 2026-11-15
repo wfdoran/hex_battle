@@ -10,13 +10,16 @@ To start the game, run `python3 -m hexbattle` from the `src` directory. See
 
 - **Human vs Computer:** you play Blue, and the computer plays Red. Choose
   the computer's level:
-  - **Easy** plays loosely and leaves some units idle.
+  - **Easy** plays loosely and often leaves units idle. A good level for
+    learning the game.
   - **Medium** works out battle odds and only attacks when it expects to win.
-  - **Hard** also avoids danger, surrounds enemies to cut off their retreat,
-    and focuses its fire.
+  - **Hard** also avoids danger, keeps its units where they can support each
+    other, and focuses its fire. Before each move it plays its best options
+    forward a turn to see how they work out, so it may pause to think.
 
-  For now, the computer knows where your units are, even in the fog, but it
-  must obey the same movement and attack rules as you.
+  The computer plays fair: it sees only what its own units can see. It
+  remembers where it last saw your units and guesses where they may have
+  gone.
 - **Human vs Human:** two players share one screen ("hot seat"). Between
   turns a hand-off screen hides the board. Each player has their own log, so
   neither sees what the other's fog of war hides.
@@ -78,6 +81,9 @@ Blue moves first. Each turn has two phases.
 
 - Click one of your units. The hexes it can move to turn **green**, and
   enemies it can attack turn **red**. Click one to move there.
+- With a unit selected, hover over an enemy to see the **battle odds**: the
+  chance that your unit wins, that the enemy wins, or that both are
+  destroyed. It also says if the enemy is out of reach this move.
 - Each unit moves at most once per turn, up to its movement distance. Moving
   is optional. Units that have already moved are drawn faded.
 - Every hex on the path must be visible when the move starts. A unit cannot

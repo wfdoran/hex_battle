@@ -14,6 +14,7 @@ from tkinter import messagebox
 
 from . import icons
 from .ai import LEVELS, ComputerPlayer
+from .combat import battle_odds
 from .game import (DRAW, IDLE_TURNS_FOR_DRAW, QUIET_TURNS_FOR_RADIATION, Game, MoveResult,
                    Phase, RadiationEvent, RangedResult, opponent)
 from .grid import ALL_HEXES, COLUMN_LETTERS, Hex, label
@@ -53,6 +54,9 @@ COLORS = {
     "start": "#3f8f4f",
     "warning": "#c25e00",
     "muted": "#666666",
+    "odds_bg": "#fffaf0",
+    "odds_outline": "#3a3a3a",
+    "odds_text": "#2b2b2b",
 }
 TILE_COLORS = {1: "#3a6db5", 2: "#b5432f"}
 SPENT_TILE_COLORS = {1: "#8ea7cc", 2: "#cc958b"}  # units that cannot act any more this phase
@@ -71,6 +75,15 @@ def unit_name(u: Unit) -> str:
 def describe(u: Unit) -> str:
     return (f"{unit_name(u)}: health {u.health}/{u.max_health}, attack {u.attack}, "
             f"defense {u.defense}, range {u.range}, movement {u.movement}, sight {u.sight}")
+
+
+def percent(p: float) -> str:
+    """A probability as a whole percentage, without rounding a real chance to 0 or 100."""
+    if 0 < p < 0.005:
+        return "<1%"
+    if 0.995 < p < 1:
+        return ">99%"
+    return f"{p:.0%}"
 
 
 def column_names(cols: tuple[int, ...]) -> str:
@@ -269,7 +282,7 @@ class App:
         self.canvas.bind("<Button-1>", self.on_board_click)
         self.canvas.bind("<Button-3>", self.on_board_right_click)
         self.canvas.bind("<Motion>", self.on_board_hover)
-        self.canvas.bind("<Leave>", lambda e: self.info.config(text=""))
+        self.canvas.bind("<Leave>", self.on_board_leave)
         self.panel.bind("<Button-1>", self.on_panel_click)
         self.panel.bind("<Motion>", self.on_panel_hover)
         return frame
@@ -775,6 +788,7 @@ class App:
         self.refresh()
 
     def on_board_hover(self, event) -> None:
+        self.canvas.delete("odds")
         h = self.hex_at(event.x, event.y)
         if h is None or self.handoff is not None or not self.game.on_board(h):
             self.info.config(text="")
@@ -785,7 +799,47 @@ class App:
         unit = self.unit_shown_at(h)
         if unit is not None:
             text += "\n" + describe(unit)
+            self.show_odds(unit, h, event.x, event.y)
         self.info.config(text=text)
+
+    def on_board_leave(self, event) -> None:
+        self.canvas.delete("odds")
+        self.info.config(text="")
+
+    def show_odds(self, enemy: Unit, h: Hex, px: float, py: float) -> None:
+        """Pop up the battle odds if the selected unit were to attack this enemy."""
+        u = self.selected
+        g = self.game
+        if (u is None or g.phase is not Phase.MOVEMENT or not self.my_turn()
+                or u.owner != g.current or enemy.owner == u.owner or h not in self.view_visible()):
+            return
+        win, lose, both = battle_odds(u.health, u.attack, u.defense,
+                                      enemy.health, enemy.attack, enemy.defense)
+        rows = [(f"{unit_name(u)} wins", win, TILE_COLORS[u.owner]),
+                (f"{unit_name(enemy)} wins", lose, TILE_COLORS[enemy.owner]),
+                ("Both destroyed", both, COLORS["odds_text"])]
+        note = "" if h in self.move_targets else "Out of reach this move"
+        cv = self.canvas
+        font = ("Helvetica", -13)
+        bold = ("Helvetica", -13, "bold")
+        line, pad, width = 19, 9, 200
+        height = pad * 2 + line * (len(rows) + 1 + bool(note))
+        # Keep the box inside the board, beside the pointer.
+        x = px + 18 if px + 18 + width < cv.winfo_width() else px - 18 - width
+        y = min(max(4, py - height / 2), cv.winfo_height() - height - 4)
+        cv.create_rectangle(x, y, x + width, y + height, fill=COLORS["odds_bg"],
+                            outline=COLORS["odds_outline"], tags="odds")
+        ty = y + pad + line / 2
+        cv.create_text(x + pad, ty, text="Battle odds", anchor="w", font=bold,
+                       fill=COLORS["odds_text"], tags="odds")
+        for name, p, color in rows:
+            ty += line
+            cv.create_text(x + pad, ty, text=name, anchor="w", font=font, fill=color, tags="odds")
+            cv.create_text(x + width - pad, ty, text=percent(p), anchor="e", font=bold,
+                           fill=color, tags="odds")
+        if note:
+            cv.create_text(x + pad, ty + line, text=note, anchor="w", font=font,
+                           fill=COLORS["muted"], tags="odds")
 
     def _panel_unit(self, event) -> Unit | None:
         for x0, y0, x1, y1, u in self.panel_hits:

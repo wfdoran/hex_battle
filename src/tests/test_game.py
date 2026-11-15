@@ -1,9 +1,11 @@
 import random
 import unittest
+from unittest import mock
 
-from hexbattle.ai import ComputerPlayer
+from hexbattle import ai
+from hexbattle.ai import ComputerPlayer, EnemyTracker
 from hexbattle.game import DRAW, QUIET_TURNS_FOR_RADIATION, Game, Phase, RuleError
-from hexbattle.grid import ALL_HEXES, hexes_within, neighbors
+from hexbattle.grid import ALL_HEXES, distance, hexes_within, neighbors
 
 
 def make_game(p1, p2, seed=0):
@@ -242,6 +244,7 @@ class ComputerTest(unittest.TestCase):
                 g.end_turn()
         return g
 
+    @mock.patch.object(ai, "SEARCH_ROLLOUTS", 2)  # keeps the hard games quick
     def test_every_level_plays_legal_games(self):
         # Any illegal action would raise RuleError.
         for seed, (l1, l2) in enumerate([("easy", "medium"), ("medium", "hard"),
@@ -252,6 +255,62 @@ class ComputerTest(unittest.TestCase):
     def test_unknown_level(self):
         with self.assertRaises(ValueError):
             ComputerPlayer(1, "impossible")
+
+    def test_hidden_units_do_not_change_decisions(self):
+        # The same game except where one Blue unit hides in the fog.
+        for level in ai.LEVELS:
+            actions = set()
+            for hidden in ((0, 2), (0, 10), (1, 5)):
+                g, units = make_game([((4, 6), (5, 3, 2, 1, 2, 2)), (hidden, (5, 3, 2, 1, 2, 2))],
+                                     [((8, 6), (5, 3, 2, 2, 2, 2)), ((9, 9), (5, 2, 3, 0, 2, 2))])
+                g.current = 2
+                self.assertNotIn(hidden, g.visible_hexes(2))
+                a = ComputerPlayer(2, level, random.Random(5)).next_action(g)
+                actions.add((a.kind, a.unit.kind if a.unit else None, a.target))
+            self.assertEqual(len(actions), 1, (level, actions))
+
+
+class EnemyTrackerTest(unittest.TestCase):
+    def test_unseen_units_start_in_their_setup_zone(self):
+        g, units = make_game([((1, 5), (5, 1, 1, 0, 1, 1))], [((9, 5), (5, 1, 1, 0, 1, 1))])
+        t = EnemyTracker(g, 2)
+        g.current, g.turn = 2, 2  # Blue has had one turn to move
+        t.update(g)
+        blue = units[(1, 5)]
+        self.assertIn((1, 5), t.possible[blue])
+        self.assertTrue(all(h[0] <= 3 for h in t.possible[blue]))
+        self.assertFalse(t.possible[blue] & g.visible_hexes(2))
+
+    def test_seen_then_hidden(self):
+        g, units = make_game([((6, 6), (5, 1, 1, 0, 2, 1))], [((8, 6), (5, 1, 1, 0, 1, 2))])
+        blue = units[(6, 6)]
+        g.current, g.turn = 2, 2
+        t = EnemyTracker(g, 2)
+        t.update(g)
+        self.assertEqual(t.possible[blue], {(6, 6)})
+        self.assertEqual([e.pos for e in t.guesses()], [(6, 6)])
+        # Blue slips away into the fog during its turn.
+        del g.board[(6, 6)]
+        blue.pos = (4, 6)
+        g.board[(4, 6)] = blue
+        g.turn = 4
+        t.update(g)
+        self.assertIn((4, 6), t.possible[blue])
+        self.assertFalse(t.possible[blue] & g.visible_hexes(2))
+        self.assertTrue(all(distance(h, (6, 6)) <= 2 for h in t.possible[blue]))
+        guess = t.guesses()[0]
+        self.assertNotIn(guess.pos, g.visible_hexes(2))
+        self.assertEqual(distance(guess.pos, (6, 6)), 1)  # the nearest hex it could be on
+
+    def test_battle_deaths_are_known(self):
+        g, units = make_game([((6, 6), (5, 1, 1, 0, 2, 1)), ((0, 2), (5, 1, 1, 0, 1, 1))],
+                             [((8, 6), (5, 1, 1, 0, 1, 2))])
+        t = EnemyTracker(g, 2)
+        blue = units[(0, 2)]
+        blue.health = 0
+        g._remove(blue)
+        t.update(g)
+        self.assertNotIn(blue, t.possible)
 
 
 class RadiationTest(unittest.TestCase):

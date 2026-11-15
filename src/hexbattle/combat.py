@@ -88,3 +88,41 @@ def battle_odds(att_health: int, att_attack: int, att_defense: int,
         return (win / scale, lose / scale, both / scale)
 
     return outcome(att_health, def_health)
+
+
+@lru_cache(maxsize=None)
+def battle_outcomes(att_health: int, att_attack: int, att_defense: int,
+                    def_health: int, def_attack: int, def_defense: int) -> dict[tuple[int, int], float]:
+    """Exact probability of each final (attacker health, defender health) of a battle."""
+    to_def = damage_odds(att_attack, def_defense)
+    to_att = damage_odds(def_attack, att_defense)
+    p_nothing = to_def[0] * to_att[0] / 10000
+
+    @lru_cache(maxsize=None)
+    def outcome(ah: int, dh: int) -> dict[tuple[int, int], float]:
+        if ah <= 0 or dh <= 0:
+            return {(max(0, ah), max(0, dh)): 1.0}
+        dist: dict[tuple[int, int], float] = {}
+        for dealt, p_dealt in enumerate(to_def):
+            for taken, p_taken in enumerate(to_att):
+                if dealt == taken == 0:
+                    continue
+                p = p_dealt * p_taken / 10000 / (1 - p_nothing)
+                for end, q in outcome(ah - taken, dh - dealt).items():
+                    dist[end] = dist.get(end, 0.0) + p * q
+        return dist
+
+    return outcome(att_health, def_health)
+
+
+@lru_cache(maxsize=None)
+def attacker_health_if_won(att_health: int, att_attack: int, att_defense: int,
+                           def_health: int, def_attack: int, def_defense: int) -> int:
+    """The attacker's expected health left after a battle it wins, rounded, at least 1."""
+    outcomes = battle_outcomes(att_health, att_attack, att_defense,
+                               def_health, def_attack, def_defense)
+    p_win = sum(p for (ah, dh), p in outcomes.items() if ah > 0 and dh == 0)
+    if p_win == 0:
+        return att_health
+    mean = sum(ah * p for (ah, dh), p in outcomes.items() if ah > 0 and dh == 0) / p_win
+    return max(1, round(mean))

@@ -100,6 +100,9 @@ class Game:
         self.last_col = COLS - 1
         self.radioactive_cols: tuple[int, ...] = ()
         self.radiation_countdown = 0  # turns left before the radioactive columns go
+        # Unlike battle deaths, these aren't all public: a player only learns
+        # how many of the enemy's hidden units radiation destroyed.
+        self.lost_to_radiation: set[Unit] = set()
 
     # ----- queries -------------------------------------------------------
 
@@ -338,6 +341,7 @@ class Game:
         for u in casualties:
             u.health = 0
             self._remove(u)
+        self.lost_to_radiation.update(casualties)
         self.first_col += 1
         self.last_col -= 1
         self.radioactive_cols = ()

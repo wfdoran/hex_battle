@@ -15,8 +15,9 @@ from tkinter import messagebox
 from . import icons
 from .ai import LEVELS, ComputerPlayer
 from .combat import battle_odds
-from .game import (DRAW, IDLE_TURNS_FOR_DRAW, QUIET_TURNS_FOR_RADIATION, Game, MoveResult,
-                   Phase, RadiationEvent, RangedResult, opponent)
+from .game import (DRAW, IDLE_TURNS_FOR_DRAW, MIN_DEFENSE, QUIET_TURNS_FOR_FATIGUE,
+                   QUIET_TURNS_FOR_RADIATION, FatigueEvent, Game, MoveResult, Phase,
+                   RadiationEvent, RangedResult, opponent)
 from .grid import ALL_HEXES, COLUMN_LETTERS, Hex, label
 from .units import Unit
 
@@ -44,6 +45,7 @@ COLORS = {
     "flash": "#ff8a00",
     "tile_outline": "#1c1c1c",
     "tile_text": "#ffffff",
+    "tired_text": "#ffd84d",  # a defense value lowered by fatigue
     "heart": "#ff5c74",
     "legend_icon": "#3a3a3a",
     "splash_text": "#e8dec3",
@@ -72,9 +74,10 @@ def unit_name(u: Unit) -> str:
     return f"{PLAYER_NAMES[u.owner]} #{u.kind}"
 
 
-def describe(u: Unit) -> str:
+def describe(u: Unit, rested_defense: int | None = None) -> str:
+    defense = f"{u.defense}" if rested_defense is None else f"{u.defense} (tired; was {rested_defense})"
     return (f"{unit_name(u)}: health {u.health}/{u.max_health}, attack {u.attack}, "
-            f"defense {u.defense}, range {u.range}, movement {u.movement}, sight {u.sight}")
+            f"defense {defense}, range {u.range}, movement {u.movement}, sight {u.sight}")
 
 
 def percent(p: float) -> str:
@@ -91,8 +94,9 @@ def column_names(cols: tuple[int, ...]) -> str:
 
 
 def draw_tile(cv: tk.Canvas, cx: float, cy: float, s: float, unit: Unit, health: int,
-              fill: str) -> None:
-    """Draw a unit as a square tile of side s: stats on top, hearts below."""
+              fill: str, tired: bool = False) -> None:
+    """Draw a unit as a square tile of side s: stats on top, hearts below.
+    A tired unit's defense, lowered by fatigue, is drawn in a warning color."""
     x0, y0 = cx - s / 2, cy - s / 2
     cv.create_rectangle(x0, y0, x0 + s, y0 + s, fill=fill, outline=COLORS["tile_outline"],
                         width=max(1.0, s / 40))
@@ -102,8 +106,8 @@ def draw_tile(cv: tk.Canvas, cx: float, cy: float, s: float, unit: Unit, health:
              ((1 / 6, 0.16), (3 / 6, 0.16), (5 / 6, 0.16), (0.30, 0.39), (0.70, 0.39))]
     for (stat, draw_icon), (sx, sy) in zip(icons.STAT_ICONS, slots):
         draw_icon(cv, sx - isz * 0.45, sy, isz, COLORS["tile_text"])
-        cv.create_text(sx + isz * 0.55, sy, text=str(getattr(unit, stat)), font=font,
-                       fill=COLORS["tile_text"])
+        color = COLORS["tired_text" if tired and stat == "defense" else "tile_text"]
+        cv.create_text(sx + isz * 0.55, sy, text=str(getattr(unit, stat)), font=font, fill=color)
     rows = [0.72] if unit.max_health <= 4 else [0.62, 0.84]
     for i in range(unit.max_health):
         row, col = divmod(i, 4)
@@ -440,7 +444,7 @@ class App:
     def end_turn(self) -> None:
         g = self.game
         self.last_seen_alive[g.current] = set(g.units_of(g.current))
-        self.log_radiation(g.end_turn())
+        self.log_events(g.end_turn())
         if g.over:
             self.refresh()
             self.announce()
@@ -531,11 +535,19 @@ class App:
                 text=f"☢ Columns {column_names(g.radioactive_cols)} are radioactive! "
                      f"Destroyed after {turns} more turn{'s' * (turns != 1)}.")
         elif g.phase in (Phase.MOVEMENT, Phase.RANGED):
-            self.radiation_label.config(
-                fg=COLORS["muted"],
-                text=f"Turns without combat: {g.quiet_turns} of {QUIET_TURNS_FOR_RADIATION}")
+            q = g.quiet_turns
+            if q < QUIET_TURNS_FOR_FATIGUE:
+                nxt = f"fatigue at {QUIET_TURNS_FOR_FATIGUE}"
+            else:
+                nxt = f"radiation at {QUIET_TURNS_FOR_RADIATION}"
+            self.radiation_label.config(fg=COLORS["muted"],
+                                        text=f"Turns without damage: {q} ({nxt})")
         else:
             self.radiation_label.config(text="")
+        if g.fatigue and g.phase is not Phase.OVER:
+            self.radiation_label.config(
+                text=self.radiation_label.cget("text")
+                + f"\nFatigue has lowered defense by {g.fatigue}.")
         self.seed_label.config(text=f"Seed: {g.seed}")
 
         if g.phase is Phase.PLACEMENT:
@@ -630,7 +642,7 @@ class App:
             if pos not in vis:
                 continue
             x, y = self.center(pos)
-            draw_tile(cv, x, y, R * 1.24, u, hp, self.tile_color(u))
+            draw_tile(cv, x, y, R * 1.24, u, hp, self.tile_color(u), u in g.rested_defense)
             cv.create_text(x, y + R * 0.745, text=f"#{u.kind}", font=label_font,
                            fill=COLORS["label_visible"])
         if self.selected is not None and self.selected.pos and not self.override:
@@ -798,7 +810,7 @@ class App:
             text += " ☢ radioactive"
         unit = self.unit_shown_at(h)
         if unit is not None:
-            text += "\n" + describe(unit)
+            text += "\n" + describe(unit, self.game.rested_defense.get(unit))
             self.show_odds(unit, h, event.x, event.y)
         self.info.config(text=text)
 
@@ -855,7 +867,7 @@ class App:
 
     def on_panel_hover(self, event) -> None:
         unit = self._panel_unit(event)
-        self.info.config(text=describe(unit) if unit else "")
+        self.info.config(text=describe(unit, self.game.rested_defense.get(unit)) if unit else "")
 
     # ----- actions and animation ---------------------------------------------
 
@@ -923,7 +935,7 @@ class App:
             self.log_ranged(result)
             self.after_event(result.hex, self.ai_continue)
         else:
-            self.log_radiation(g.end_turn())
+            self.log_events(g.end_turn())
             self.busy = False
             if g.over:
                 self.refresh()
@@ -987,11 +999,16 @@ class App:
                 by = shooter.replace("A hidden", "a hidden")
                 self.losses[t] = f"was shot at {label(r.hex)} by {by}."
 
-    def log_radiation(self, events: list[RadiationEvent]) -> None:
+    def log_events(self, events: list[RadiationEvent | FatigueEvent]) -> None:
         for e in events:
+            if isinstance(e, FatigueEvent):
+                self.post_all(f"{QUIET_TURNS_FOR_FATIGUE} turns without damage: every unit is "
+                              f"fatigued, and its defense drops by 1 (to no less than "
+                              f"{MIN_DEFENSE}).")
+                continue
             cols = column_names(e.columns)
             if e.kind == "warning":
-                self.post_all(f"☢ {QUIET_TURNS_FOR_RADIATION} turns without combat: "
+                self.post_all(f"☢ {QUIET_TURNS_FOR_RADIATION} turns without damage: "
                               f"columns {cols} are now radioactive! They and any units on "
                               "them will be destroyed in 2 turns.")
                 continue

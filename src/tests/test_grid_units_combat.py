@@ -73,7 +73,7 @@ class UnitsTest(unittest.TestCase):
 
     def test_new_stat_limits(self):
         self.assertEqual(STAT_RANGES["health"], (4, 8))
-        self.assertEqual(STAT_RANGES["sight"], (1, 4))
+        self.assertEqual(STAT_RANGES["sight"], (1, 3))
 
 
 class CombatTest(unittest.TestCase):

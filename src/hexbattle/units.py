@@ -16,7 +16,7 @@ STAT_RANGES = {
     "defense": (1, 5),
     "range": (0, 4),
     "movement": (1, 4),
-    "sight": (1, 4),
+    "sight": (1, 3),
 }
 STAT_TOTAL = 15
 ROSTER_SIZE = 10

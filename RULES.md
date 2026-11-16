@@ -48,9 +48,10 @@ always add up to 15, and at most 4 of the 10 units have range 0:
 | shield | Defense | 1–5 | How well it resists hits. |
 | target | Range | 0–4 | How far it can shoot in the ranged-attack phase. 0 means it cannot shoot. |
 | feet | Movement | 1–4 | How many hexes it can move per turn. |
-| eye | Sight | 1–4 | How far it can see. |
+| eye | Sight | 1–3 | How far it can see. |
 
-Only health changes during the game.
+Health changes during the game, and so can defense, through
+[fatigue](#fatigue-and-radiation).
 
 ## Setup
 
@@ -140,20 +141,26 @@ each other at the same time, round after round, until one or both are
 destroyed. A surviving attacker takes over the hex, and a surviving defender
 stays where it is. The log shows the damage dealt and taken in each round.
 
-## Radiation
+## Fatigue and radiation
 
-Long standoffs don't last. The side panel counts **turns without combat**.
-A turn is one player's turn, and any battle or ranged attack resets the
-count, even one that does no damage.
+Long standoffs don't last. The side panel counts **turns without damage**.
+A turn is one player's turn. Any damage to any unit, from a battle or a
+ranged attack, resets the count. A ranged attack that does no damage does
+not reset it.
 
-- After **10 turns without combat**, the two outermost columns still on the
+- After **6 turns without damage**, every unit becomes **fatigued**: its
+  defense drops by 1, but never below 1. This lasts for the rest of the
+  game. A lowered defense is shown in yellow on the unit's tile, and the
+  side panel shows how much fatigue has lowered defense.
+- After **10 turns without damage**, the two outermost columns still on the
   board become **radioactive**. They turn yellow and show the radiation
   symbol, and the side panel shows a warning.
 - **Two turns later**, one turn for each player, the radioactive columns are
   destroyed, along with any units still on them. Destroyed columns are dark
   and are no longer part of the board.
-- The count then starts again from zero, and the board keeps shrinking from
-  both edges until somebody fights.
+- The count then starts again from zero. Another 6 turns without damage
+  bring more fatigue, and another 10 shrink the board again, until somebody
+  fights.
 
 Get your units out of radioactive columns in time.
 

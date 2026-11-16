@@ -13,11 +13,16 @@ from .units import StatLine, Unit, random_roster
 SETUP_COLUMNS = {1: (0, 1, 2), 2: (8, 9, 10)}
 # The game is a draw after this many consecutive turns with no move or attack.
 IDLE_TURNS_FOR_DRAW = 2
-# After this many consecutive turns without a battle or ranged attack, the two
-# outermost columns become radioactive, and they are destroyed (with any units
-# on them) once RADIATION_DELAY more turns have been played.
+# A quiet turn is one in which no unit takes any damage.  After
+# QUIET_TURNS_FOR_FATIGUE quiet turns in a row, every unit's defense drops by
+# 1 (to no less than MIN_DEFENSE) for the rest of the game.  After
+# QUIET_TURNS_FOR_RADIATION, the two outermost columns become radioactive, and
+# they are destroyed (with any units on them) once RADIATION_DELAY more turns
+# have been played.
+QUIET_TURNS_FOR_FATIGUE = 6
 QUIET_TURNS_FOR_RADIATION = 10
 RADIATION_DELAY = 2
+MIN_DEFENSE = 1
 DRAW = 0
 
 
@@ -76,6 +81,11 @@ class RadiationEvent:
     casualties: list[Unit]
 
 
+@dataclass
+class FatigueEvent:
+    tired: list[Unit]  # living units whose defense dropped (those not already at the minimum)
+
+
 class Game:
     def __init__(self, seed: int | None = None, roster: list[StatLine] | None = None):
         # Always have a seed, so any game's units can be replayed.
@@ -93,13 +103,15 @@ class Game:
         self.winner: int | None = None  # 1, 2, or DRAW once the game is over
         self.idle_turns = 0
         self.acted = False  # whether the current player has moved or attacked this turn
-        self.fought = False  # whether there was a battle or ranged attack this turn
+        self.damaged = False  # whether any unit took damage this turn
         self.quiet_turns = 0
         # Columns still on the board run from first_col to last_col.
         self.first_col = 0
         self.last_col = COLS - 1
         self.radioactive_cols: tuple[int, ...] = ()
         self.radiation_countdown = 0  # turns left before the radioactive columns go
+        self.fatigue = 0  # how many times fatigue has lowered every unit's defense
+        self.rested_defense: dict[Unit, int] = {}  # defense before fatigue, for units it lowered
         # Unlike battle deaths, these aren't all public: a player only learns
         # how many of the enemy's hidden units radiation destroyed.
         self.lost_to_radiation: set[Unit] = set()
@@ -239,8 +251,9 @@ class Game:
             enemy = self.board.get(step)
             if enemy is not None:
                 taken.append(step)
+                # Battles go on until a unit is destroyed, so there is always damage.
                 battle = self._battle(unit, enemy, step)
-                self.fought = True
+                self.damaged = True
                 break
             # An enemy hidden in the fog may put the step in a zone of control.
             if (self._adjacent_enemies(here, unit.owner) > 0
@@ -299,14 +312,14 @@ class Game:
             self._remove(target)
         unit.fired = True
         self.acted = True
-        self.fought = True
+        self.damaged = self.damaged or damage > 0
         self._check_over()
         return RangedResult(unit, target, h, damage)
 
     # ----- turns ---------------------------------------------------------
 
-    def end_turn(self) -> list[RadiationEvent]:
-        """Finish the current player's turn and return any radiation events."""
+    def end_turn(self) -> list[RadiationEvent | FatigueEvent]:
+        """Finish the current player's turn and return any fatigue or radiation events."""
         if self.phase is not Phase.RANGED:
             raise RuleError("end the movement phase first")
         events = self._advance_radiation()
@@ -322,18 +335,28 @@ class Game:
         self._begin_turn()
         return events
 
-    def _advance_radiation(self) -> list[RadiationEvent]:
+    def _advance_radiation(self) -> list[RadiationEvent | FatigueEvent]:
         if self.radiation_countdown:
             self.radiation_countdown -= 1
             if self.radiation_countdown:
                 return []
             return [self._destroy_radioactive_columns()]
-        self.quiet_turns = 0 if self.fought else self.quiet_turns + 1
+        self.quiet_turns = 0 if self.damaged else self.quiet_turns + 1
+        if self.quiet_turns == QUIET_TURNS_FOR_FATIGUE:
+            return [self._tire()]
         if self.quiet_turns < QUIET_TURNS_FOR_RADIATION:
             return []
         self.radioactive_cols = tuple(sorted({self.first_col, self.last_col}))
         self.radiation_countdown = RADIATION_DELAY
         return [RadiationEvent("warning", self.radioactive_cols, [])]
+
+    def _tire(self) -> FatigueEvent:
+        tired = [u for u in self.units if u.alive and u.defense > MIN_DEFENSE]
+        for u in tired:
+            self.rested_defense.setdefault(u, u.defense)
+            u.defense -= 1
+        self.fatigue += 1
+        return FatigueEvent(tired)
 
     def _destroy_radioactive_columns(self) -> RadiationEvent:
         cols = self.radioactive_cols
@@ -351,7 +374,7 @@ class Game:
     def _begin_turn(self) -> None:
         self.phase = Phase.MOVEMENT
         self.acted = False
-        self.fought = False
+        self.damaged = False
         for u in self.units:
             u.moved = u.fired = False
 

@@ -48,7 +48,7 @@ python3 -m unittest discover -s tests -t .
 | `hexbattle/grid.py`   | Hex coordinates, neighbors, distance, labels (A1–K5) |
 | `hexbattle/units.py`  | Unit stats and random roster generation |
 | `hexbattle/combat.py` | Damage table, single attacks, battles, exact battle odds and outcomes |
-| `hexbattle/game.py`   | Rules engine: setup, fog of war, movement, ranged attacks, turns, radiation, end of game |
+| `hexbattle/game.py`   | Rules engine: setup, fog of war, movement, ranged attacks, turns, fatigue, radiation, end of game |
 | `hexbattle/ai.py`     | Computer player (easy, medium, hard) and the fog-of-war enemy tracker it plays from |
 | `hexbattle/icons.py`  | Vector icons (heart, swords, shield, target, feet, eye, radiation) |
 | `hexbattle/gui.py`    | Tkinter window: start screen, board drawing, input, animation, battle-odds pop-up, hot-seat hand-off, per-player logs |

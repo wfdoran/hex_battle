@@ -4,7 +4,8 @@ from unittest import mock
 
 from hexbattle import ai
 from hexbattle.ai import ComputerPlayer, EnemyTracker
-from hexbattle.game import DRAW, QUIET_TURNS_FOR_RADIATION, Game, Phase, RuleError
+from hexbattle.game import (DRAW, MIN_DEFENSE, QUIET_TURNS_FOR_FATIGUE, QUIET_TURNS_FOR_RADIATION,
+                            FatigueEvent, Game, Phase, RuleError)
 from hexbattle.grid import ALL_HEXES, distance, hexes_within, neighbors
 
 
@@ -327,12 +328,13 @@ class RadiationTest(unittest.TestCase):
         self.doomed = {units[(0, 4)], units[(10, 6)]}
 
     def walk(self):
-        """Play a turn with no combat: the current walker steps down or back up."""
+        """Play a turn with no damage: the current walker steps down or back up.
+        Returns the radiation events (fatigue events are left out)."""
         g = self.g
         u = self.walkers[g.current]
         g.move(u, (u.pos[0], u.pos[1] + (2 if u.pos[1] == 6 else -2)))
         g.end_movement()
-        return g.end_turn()
+        return [e for e in g.end_turn() if not isinstance(e, FatigueEvent)]
 
     def test_columns_become_radioactive_then_vanish(self):
         g = self.g
@@ -355,16 +357,65 @@ class RadiationTest(unittest.TestCase):
             self.walk()
         self.assertEqual(g.radioactive_cols, (1, 9))
 
-    def test_combat_resets_the_clock(self):
+    def shoot(self, damage):
+        """Blue's walker shoots Red's for the given damage instead of walking."""
+        g = self.g
+        self.assertEqual(g.current, 1)
+        g.end_movement()
+        with mock.patch("hexbattle.game.roll_damage", return_value=damage):
+            g.ranged_attack(self.walkers[1], self.walkers[2])
+        g.end_turn()
+
+    def test_damage_resets_the_clock(self):
         g = self.g
         for _ in range(QUIET_TURNS_FOR_RADIATION - 2):
             self.walk()
-        self.assertEqual(g.current, 1)
-        archer, red = self.walkers[1], self.walkers[2]
-        g.end_movement()
-        g.ranged_attack(archer, red)  # counts as combat even if it misses
-        g.end_turn()
+        self.shoot(1)
         self.assertEqual(g.quiet_turns, 0)
+
+    def test_a_miss_does_not_reset_the_clock(self):
+        g = self.g
+        for _ in range(QUIET_TURNS_FOR_RADIATION - 2):
+            self.walk()
+        self.shoot(0)
+        self.assertEqual(g.quiet_turns, QUIET_TURNS_FOR_RADIATION - 1)
+
+    def test_fatigue_lowers_every_defense(self):
+        g = self.g
+        before = {u: u.defense for u in g.units if u.alive}
+        for _ in range(QUIET_TURNS_FOR_FATIGUE - 1):
+            self.walk()
+        self.assertEqual(g.fatigue, 0)
+        u = self.walkers[g.current]
+        g.move(u, (u.pos[0], u.pos[1] + (2 if u.pos[1] == 6 else -2)))
+        g.end_movement()
+        events = g.end_turn()
+        self.assertEqual(len(events), 1)
+        self.assertIsInstance(events[0], FatigueEvent)
+        self.assertEqual(g.fatigue, 1)
+        for u, d in before.items():
+            self.assertEqual(u.defense, max(MIN_DEFENSE, d - 1))
+        # Units already at the minimum aren't listed as tired.
+        self.assertEqual(set(events[0].tired), {u for u, d in before.items() if d > MIN_DEFENSE})
+        self.assertEqual(g.rested_defense, {u: before[u] for u in events[0].tired})
+
+    def test_fatigue_lasts_and_strikes_again(self):
+        g = self.g
+        red = self.walkers[2]  # defense 5
+        while g.radioactive_cols == ():
+            self.walk()
+        self.walk()
+        self.walk()  # the edge columns are destroyed and the count restarts
+        self.assertEqual((g.fatigue, red.defense), (1, 4))
+        for _ in range(QUIET_TURNS_FOR_FATIGUE):
+            self.walk()
+        self.assertEqual((g.fatigue, red.defense), (2, 3))
+        self.assertEqual(g.rested_defense[red], 5)
+        # Damage restarts the count but doesn't undo fatigue.
+        if g.current == 2:
+            self.walk()
+        self.shoot(1)
+        self.assertEqual((g.quiet_turns, red.defense), (0, 3))
 
     def test_last_column_destroys_everyone(self):
         g = self.g

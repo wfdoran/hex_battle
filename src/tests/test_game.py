@@ -4,8 +4,8 @@ from unittest import mock
 
 from hexbattle import ai
 from hexbattle.ai import ComputerPlayer, EnemyTracker
-from hexbattle.game import (DRAW, MIN_DEFENSE, QUIET_TURNS_FOR_FATIGUE, QUIET_TURNS_FOR_RADIATION,
-                            FatigueEvent, Game, Phase, RuleError)
+from hexbattle.game import (DRAW, MIN_DEFENSE, MIN_MOVEMENT, QUIET_TURNS_FOR_FATIGUE,
+                            QUIET_TURNS_FOR_RADIATION, FatigueEvent, Game, Phase, RuleError)
 from hexbattle.grid import ALL_HEXES, distance, hexes_within, neighbors
 
 
@@ -166,8 +166,8 @@ class BattleTest(unittest.TestCase):
     def test_last_units_can_draw_or_win(self):
         outcomes = set()
         for seed in range(200):
-            g, units = make_game([((4, 6), (1, 5, 1, 0, 1, 5))],
-                                 [((5, 7), (1, 5, 1, 0, 1, 1))], seed=seed)
+            g, units = make_game([((4, 6), (1, 3, 1, 0, 1, 5))],
+                                 [((5, 7), (1, 3, 1, 0, 1, 1))], seed=seed)
             g.move(units[(4, 6)], (5, 7))
             self.assertTrue(g.over)
             outcomes.add(g.winner)
@@ -199,6 +199,80 @@ class RangedTest(unittest.TestCase):
         g, units = make_game([((4, 6), (5, 5, 1, 0, 1, 4))], [((5, 7), (5, 1, 1, 0, 1, 1))])
         g.end_movement()
         self.assertEqual(g.ranged_targets(units[(4, 6)]), [])
+
+
+class AnchorTest(unittest.TestCase):
+    """A Blue archer fires at a Red unit 2 hexes away, while a Red walker
+    paces back and forth so the game never stalls."""
+
+    def setUp(self):
+        self.g, units = make_game([((2, 6), (5, 2, 1, 3, 1, 3))],
+                                  [((4, 6), (8, 1, 4, 0, 1, 1)), ((8, 6), (5, 1, 1, 0, 4, 4))])
+        self.archer, self.target, self.walker = units[(2, 6)], units[(4, 6)], units[(8, 6)]
+
+    def blue_turn(self, move_to=None):
+        """Optionally move the archer, then fire it; returns the attack it fired with."""
+        g = self.g
+        if move_to is not None:
+            g.move(self.archer, move_to)
+            self.assertFalse(g.anchored(self.archer))  # moving ends it at once
+        g.end_movement()
+        with mock.patch("hexbattle.game.roll_damage", return_value=0) as roll:
+            result = g.ranged_attack(self.archer, self.target)
+        self.assertEqual(result.anchored, g.anchored(self.archer))
+        g.end_turn()
+        return roll.call_args.args[0]
+
+    def red_turn(self):
+        g = self.g
+        w = self.walker
+        g.move(w, (8, 8) if w.pos == (8, 6) else (8, 6))
+        g.end_movement()
+        g.end_turn()
+
+    def test_two_turns_in_place_gives_plus_one(self):
+        g = self.g
+        self.assertFalse(g.anchored(self.archer))  # no previous turn to have stayed through
+        self.assertEqual(self.blue_turn(), 2)
+        self.assertTrue(g.anchored(self.archer))  # it will be, if it stays put
+        self.red_turn()
+        self.assertTrue(g.anchored(self.archer))
+        self.assertEqual(self.blue_turn(), 3)
+        self.red_turn()
+        self.assertEqual(self.blue_turn(), 3)  # and it lasts while it stays
+
+    def test_moving_loses_it(self):
+        g = self.g
+        self.blue_turn()
+        self.red_turn()
+        self.assertEqual(self.blue_turn(move_to=(2, 8)), 2)
+        self.red_turn()
+        self.assertFalse(g.anchored(self.archer))
+        self.assertEqual(self.blue_turn(), 2)  # one turn in place isn't enough
+        self.red_turn()
+        self.assertEqual(self.blue_turn(), 3)
+
+    def test_battles_use_the_plain_attack(self):
+        g = self.g
+        # Put the archer next to its target; it still fires from there.
+        g.board.pop(self.archer.pos)
+        self.archer.pos = (3, 5)
+        g.board[(3, 5)] = self.archer
+        self.blue_turn()
+        self.red_turn()
+        self.assertTrue(g.anchored(self.archer))
+        with mock.patch("hexbattle.game.battle_rounds", return_value=([], 5, 0)) as battle:
+            g.move(self.archer, (4, 6))
+        self.assertEqual(battle.call_args.args[1], 2)  # the attacker's attack, without the bonus
+        self.assertFalse(g.anchored(self.archer))  # attacking is a move
+
+    def test_units_that_cannot_shoot_are_never_anchored(self):
+        g = self.g
+        self.blue_turn()
+        self.red_turn()
+        # Red's target stayed put on its turn, which would show as x+1 now...
+        self.assertEqual(self.target.stays, 1)
+        self.assertFalse(g.anchored(self.target))  # ...but it has range 0
 
 
 class TurnTest(unittest.TestCase):
@@ -322,7 +396,7 @@ class RadiationTest(unittest.TestCase):
 
     def setUp(self):
         self.g, units = make_game(
-            [((4, 6), (5, 1, 1, 3, 1, 4)), ((0, 4), self.STILL)],
+            [((4, 6), (5, 1, 1, 3, 2, 3)), ((0, 4), self.STILL)],
             [((6, 6), (8, 1, 5, 0, 1, 1)), ((10, 6), self.STILL)])
         self.walkers = {1: units[(4, 6)], 2: units[(6, 6)]}
         self.doomed = {units[(0, 4)], units[(10, 6)]}
@@ -380,9 +454,9 @@ class RadiationTest(unittest.TestCase):
         self.shoot(0)
         self.assertEqual(g.quiet_turns, QUIET_TURNS_FOR_RADIATION - 1)
 
-    def test_fatigue_lowers_every_defense(self):
+    def test_fatigue_lowers_every_defense_and_movement(self):
         g = self.g
-        before = {u: u.defense for u in g.units if u.alive}
+        before = {u: {"defense": u.defense, "movement": u.movement} for u in g.units if u.alive}
         for _ in range(QUIET_TURNS_FOR_FATIGUE - 1):
             self.walk()
         self.assertEqual(g.fatigue, 0)
@@ -393,11 +467,18 @@ class RadiationTest(unittest.TestCase):
         self.assertEqual(len(events), 1)
         self.assertIsInstance(events[0], FatigueEvent)
         self.assertEqual(g.fatigue, 1)
-        for u, d in before.items():
-            self.assertEqual(u.defense, max(MIN_DEFENSE, d - 1))
-        # Units already at the minimum aren't listed as tired.
-        self.assertEqual(set(events[0].tired), {u for u, d in before.items() if d > MIN_DEFENSE})
-        self.assertEqual(g.rested_defense, {u: before[u] for u in events[0].tired})
+        floors = {"defense": MIN_DEFENSE, "movement": MIN_MOVEMENT}
+        for u, stats in before.items():
+            for stat, value in stats.items():
+                self.assertEqual(getattr(u, stat), max(floors[stat], value - 1))
+        # The record keeps the old values of only the stats that dropped.
+        lowered = {u: {stat: value for stat, value in stats.items() if value > floors[stat]}
+                   for u, stats in before.items()}
+        lowered = {u: stats for u, stats in lowered.items() if stats}
+        self.assertEqual(g.rested, lowered)
+        self.assertEqual(lowered[self.walkers[1]], {"movement": 2})  # its defense was already 1
+        # Units with every stat already at the minimum aren't listed as tired.
+        self.assertEqual(set(events[0].tired), set(lowered))
 
     def test_fatigue_lasts_and_strikes_again(self):
         g = self.g
@@ -410,7 +491,7 @@ class RadiationTest(unittest.TestCase):
         for _ in range(QUIET_TURNS_FOR_FATIGUE):
             self.walk()
         self.assertEqual((g.fatigue, red.defense), (2, 3))
-        self.assertEqual(g.rested_defense[red], 5)
+        self.assertEqual(g.rested[red], {"defense": 5})
         # Damage restarts the count but doesn't undo fatigue.
         if g.current == 2:
             self.walk()

@@ -55,8 +55,10 @@ class Unit:
     sight: int
     health: int = 0
     pos: Hex | None = None
-    moved: bool = False
+    moved: bool = False  # took its move this turn (it may have been stopped before leaving its hex)
+    relocated: bool = False  # left its hex this turn
     fired: bool = False
+    stays: int = 0  # the owner's movement phases in a row the unit ended on the hex it started on
 
     def __post_init__(self) -> None:
         if not self.health:

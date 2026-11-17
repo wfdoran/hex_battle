@@ -50,8 +50,12 @@ always add up to 15, and at most 4 of the 10 units have range 0:
 | feet | Movement | 1–4 | How many hexes it can move per turn. |
 | eye | Sight | 1–3 | How far it can see. |
 
-Health changes during the game, and so can defense, through
-[fatigue](#fatigue-and-radiation).
+Each tile shows attack and defense on the top row, then range, movement
+and sight, with the unit's hearts below.
+
+Health changes during the game, and so can defense and movement, through
+[fatigue](#fatigue-and-radiation). A unit that holds its position gets a
+bonus to its ranged attacks; see [anchored](#anchored-units).
 
 ## Setup
 
@@ -113,11 +117,31 @@ Blue moves first. Each turn has two phases.
 - Click a unit that can fire. Its targets are outlined in red. Click one.
   Units that cannot fire are drawn faded.
 - A ranged attack is a single attack, and the target does not fire back.
+- An **anchored** unit adds 1 to its attack when it fires. See below.
 - Click **End turn** when you are done. The other side then plays its turn.
   In a hot-seat game, a hand-off screen comes up first. The next player
   clicks it when the other player has looked away. If any of their units
   were destroyed since their last turn, a pop-up lists them and how they
   were lost.
+
+### Anchored units
+
+A unit with range 1 or more is **anchored** if it stayed put through two
+of your movement phases in a row: last turn's and this turn's.
+
+- Its attack is shown as **x+1**, for example "3+1", on its tile and when
+  you hover over it.
+- The +1 counts only for **ranged attacks**. Battles use the plain attack.
+- Moving ends it at once, and so does attacking, since an attack is a move.
+  It then takes two more movement phases in place to anchor again.
+- A unit that had its move stopped before it left its hex still counts as
+  staying put.
+- The x+1 shows ahead of time. During your opponent's turn, and during your
+  movement phase before the unit moves, x+1 means the unit will be anchored
+  when you fire, as long as it doesn't move first. Enemy units show it too,
+  when you can see them.
+- No unit can be anchored on the first turn, since there was no earlier
+  turn to stay put through.
 
 ## Combat
 
@@ -126,8 +150,8 @@ Every attack compares the attacker's **attack** with the defender's
 
 | attack − defense | 0 damage | 1 | 2 | 3 | 4 |
 |------------------|----------|-----|-----|-----|-----|
-| +4 | 20% | 20% | 20% | 20% | 20% |
-| +3 | 25% | 25% | 25% | 25% | |
+| +4 | | | 34% | 33% | 33% |
+| +3 | | 34% | 33% | 33% | |
 | +2 | 34% | 33% | 33% | | |
 | +1 | 50% | 50% | | | |
 | 0  | 67% | 33% | | | |
@@ -149,9 +173,9 @@ ranged attack, resets the count. A ranged attack that does no damage does
 not reset it.
 
 - After **6 turns without damage**, every unit becomes **fatigued**: its
-  defense drops by 1, but never below 1. This lasts for the rest of the
-  game. A lowered defense is shown in yellow on the unit's tile, and the
-  side panel shows how much fatigue has lowered defense.
+  defense and its movement each drop by 1, but never below 1. This lasts
+  for the rest of the game. A lowered value is shown in yellow on the
+  unit's tile, and the side panel shows how much fatigue has lowered them.
 - After **10 turns without damage**, the two outermost columns still on the
   board become **radioactive**. They turn yellow and show the radiation
   symbol, and the side panel shows a warning.

@@ -344,22 +344,23 @@ class ComputerPlayer:
             targets = game.ranged_targets(u)
             if not targets:
                 continue
+            attack = game.ranged_attack_strength(u)
             if self.level == "easy":
                 target = self.rng.choice(targets)
             elif self.level == "medium":
-                target = max(targets, key=lambda t: 5 * kill_chance(u.attack, t.defense, t.health)
-                             + expected_damage(u.attack, t.defense))
+                target = max(targets, key=lambda t: 5 * kill_chance(attack, t.defense, t.health)
+                             + expected_damage(attack, t.defense))
             else:
-                target = max(targets, key=lambda t: self._shot_value(u, t))
+                target = max(targets, key=lambda t: self._shot_value(attack, t))
             return Action("ranged", u, target)
         return Action("end_turn")
 
     # ----- scoring -----------------------------------------------------------
 
     @staticmethod
-    def _shot_value(u: Unit, t: Unit) -> float:
-        return (kill_chance(u.attack, t.defense, t.health) * unit_value(t)
-                + expected_damage(u.attack, t.defense) * (1 + 1 / t.health))
+    def _shot_value(attack: int, t: Unit) -> float:
+        return (kill_chance(attack, t.defense, t.health) * unit_value(t)
+                + expected_damage(attack, t.defense) * (1 + 1 / t.health))
 
     def _attack_gain(self, game: Game, u: Unit, enemy: Unit, dest: Hex) -> float:
         if self.level == "easy":
@@ -448,8 +449,10 @@ class ComputerPlayer:
         score = -HARD_DANGER * self._danger(u, h, enemies)
         if u.range:
             # Best shot available from here, if this side could see the target.
+            # Staying put keeps an anchored unit's bonus.
+            attack = game.ranged_attack_strength(u) if h == u.pos else u.attack
             sight = self._visible | hexes_within(h, u.sight)
-            shots = [self._shot_value(u, e) for e, d in zip(enemies, dists)
+            shots = [self._shot_value(attack, e) for e, d in zip(enemies, dists)
                      if 1 <= d <= u.range and e.pos in sight]
             score += max(shots, default=0.0)
             score -= 0.4 * max(0, min(dists) - u.range)

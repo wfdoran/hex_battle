@@ -81,6 +81,11 @@ class CombatTest(unittest.TestCase):
         for diff, odds in DAMAGE_TABLE.items():
             self.assertEqual(sum(odds), 100, diff)
 
+    def test_a_big_attack_edge_always_hurts(self):
+        self.assertEqual(damage_odds(5, 1)[:2], (0, 0))  # +4: at least 2 damage
+        self.assertEqual(damage_odds(4, 1)[0], 0)  # +3: at least 1 damage
+        self.assertEqual(damage_odds(1, 5), DAMAGE_TABLE[-4])
+
     def test_all_stat_differences_covered(self):
         for a in range(1, 6):
             for d in range(1, 6):
@@ -107,7 +112,9 @@ class CombatTest(unittest.TestCase):
         wins = sum(battle_rounds(5, 3, 2, 4, 2, 4, rng)[2] == 0 and True for _ in range(n))
         # wins here counts defender deaths, i.e. attacker wins plus mutual destruction
         self.assertAlmostEqual(wins / n, win + both, delta=0.015)
-        self.assertEqual(battle_odds(1, 5, 1, 1, 5, 1)[2], 0.64 / (1 - 0.04))
+        # One health each, +2 both ways: a round ends it unless both miss (34% each).
+        self.assertAlmostEqual(battle_odds(1, 3, 1, 1, 3, 1)[2], 0.66 ** 2 / (1 - 0.34 ** 2))
+        self.assertAlmostEqual(battle_odds(1, 5, 1, 1, 5, 1)[2], 1.0)  # +4 never misses
 
 
 if __name__ == "__main__":

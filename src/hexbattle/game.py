@@ -14,8 +14,9 @@ SETUP_COLUMNS = {1: (0, 1, 2), 2: (8, 9, 10)}
 # The game is a draw after this many consecutive turns with no move or attack.
 IDLE_TURNS_FOR_DRAW = 2
 # A quiet turn is one in which no unit takes any damage.  After
-# QUIET_TURNS_FOR_FATIGUE quiet turns in a row, every unit's defense drops by
-# 1 (to no less than MIN_DEFENSE) for the rest of the game.  After
+# QUIET_TURNS_FOR_FATIGUE quiet turns in a row, every unit's defense and
+# movement drop by 1 (to no less than MIN_DEFENSE and MIN_MOVEMENT) for the
+# rest of the game.  After
 # QUIET_TURNS_FOR_RADIATION, the two outermost columns become radioactive, and
 # they are destroyed (with any units on them) once RADIATION_DELAY more turns
 # have been played.
@@ -23,6 +24,10 @@ QUIET_TURNS_FOR_FATIGUE = 6
 QUIET_TURNS_FOR_RADIATION = 10
 RADIATION_DELAY = 2
 MIN_DEFENSE = 1
+MIN_MOVEMENT = 1
+# An anchored unit, one that stayed put through its previous movement phase
+# and the one before, adds this to its attack when it fires.
+ANCHOR_BONUS = 1
 DRAW = 0
 
 
@@ -68,6 +73,7 @@ class RangedResult:
     target: Unit
     hex: Hex
     damage: int
+    anchored: bool  # whether the attacker fired with the anchor bonus
 
     @property
     def killed(self) -> bool:
@@ -83,7 +89,7 @@ class RadiationEvent:
 
 @dataclass
 class FatigueEvent:
-    tired: list[Unit]  # living units whose defense dropped (those not already at the minimum)
+    tired: list[Unit]  # living units with a stat that dropped (not every stat was at its minimum)
 
 
 class Game:
@@ -110,8 +116,9 @@ class Game:
         self.last_col = COLS - 1
         self.radioactive_cols: tuple[int, ...] = ()
         self.radiation_countdown = 0  # turns left before the radioactive columns go
-        self.fatigue = 0  # how many times fatigue has lowered every unit's defense
-        self.rested_defense: dict[Unit, int] = {}  # defense before fatigue, for units it lowered
+        self.fatigue = 0  # how many times fatigue has struck
+        # Stat values before fatigue, for each stat it lowered: rested[unit]["defense"].
+        self.rested: dict[Unit, dict[str, int]] = {}
         # Unlike battle deaths, these aren't all public: a player only learns
         # how many of the enemy's hidden units radiation destroyed.
         self.lost_to_radiation: set[Unit] = set()
@@ -146,6 +153,25 @@ class Game:
         for u in self.units_of(player):
             vis |= hexes_within(u.pos, u.sight)
         return {h for h in vis if self.on_board(h)}
+
+    def anchored(self, unit: Unit) -> bool:
+        """Whether the unit gets ANCHOR_BONUS on ranged attacks.
+
+        In its own ranged phase, a unit is anchored if it stayed put in this
+        turn's movement phase and in its previous one.  At other times this
+        tells whether it will be anchored when it next fires, provided it
+        doesn't move before then: it stayed put last time and hasn't moved
+        since.  Units that can't shoot are never anchored.
+        """
+        if not unit.alive or unit.range == 0 or self.phase in (Phase.PLACEMENT, Phase.OVER):
+            return False
+        if unit.owner == self.current and self.phase is Phase.RANGED:
+            return unit.stays >= 2
+        return unit.stays >= 1 and not unit.relocated
+
+    def ranged_attack_strength(self, unit: Unit) -> int:
+        """The attack the unit fires with, counting the anchor bonus."""
+        return unit.attack + (ANCHOR_BONUS if self.anchored(unit) else 0)
 
     def _adjacent_enemies(self, h: Hex, player: int, known: set[Hex] | None = None) -> int:
         """Count enemy units next to h, optionally only those in `known` hexes."""
@@ -265,6 +291,7 @@ class Game:
             unit.pos = here
             self.board[here] = unit
         unit.moved = True
+        unit.relocated = bool(taken)
         self.acted = True
         self._check_over()
         return MoveResult(unit, start, planned, taken, battle)
@@ -290,6 +317,8 @@ class Game:
     def end_movement(self) -> None:
         if self.phase is not Phase.MOVEMENT:
             raise RuleError("not in the movement phase")
+        for u in self.units_of(self.current):
+            u.stays = 0 if u.relocated else u.stays + 1
         self.phase = Phase.RANGED
 
     # ----- ranged attacks ------------------------------------------------
@@ -306,7 +335,8 @@ class Game:
         if target not in self.ranged_targets(unit):
             raise RuleError("illegal ranged attack")
         h = target.pos
-        damage = roll_damage(unit.attack, target.defense, self.rng)
+        anchored = self.anchored(unit)
+        damage = roll_damage(self.ranged_attack_strength(unit), target.defense, self.rng)
         target.health = max(0, target.health - damage)
         if not target.alive:
             self._remove(target)
@@ -314,7 +344,7 @@ class Game:
         self.acted = True
         self.damaged = self.damaged or damage > 0
         self._check_over()
-        return RangedResult(unit, target, h, damage)
+        return RangedResult(unit, target, h, damage, anchored)
 
     # ----- turns ---------------------------------------------------------
 
@@ -351,10 +381,19 @@ class Game:
         return [RadiationEvent("warning", self.radioactive_cols, [])]
 
     def _tire(self) -> FatigueEvent:
-        tired = [u for u in self.units if u.alive and u.defense > MIN_DEFENSE]
-        for u in tired:
-            self.rested_defense.setdefault(u, u.defense)
-            u.defense -= 1
+        tired = []
+        for u in self.units:
+            if not u.alive:
+                continue
+            lowered = False
+            for stat, floor in (("defense", MIN_DEFENSE), ("movement", MIN_MOVEMENT)):
+                value = getattr(u, stat)
+                if value > floor:
+                    self.rested.setdefault(u, {}).setdefault(stat, value)
+                    setattr(u, stat, value - 1)
+                    lowered = True
+            if lowered:
+                tired.append(u)
         self.fatigue += 1
         return FatigueEvent(tired)
 
@@ -376,7 +415,7 @@ class Game:
         self.acted = False
         self.damaged = False
         for u in self.units:
-            u.moved = u.fired = False
+            u.moved = u.relocated = u.fired = False
 
     def _check_over(self) -> None:
         alive1 = bool(self.units_of(1))

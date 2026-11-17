@@ -7,8 +7,8 @@ from functools import lru_cache
 
 # attack - defense -> percent chance of 0, 1, 2, ... damage in a single attack.
 DAMAGE_TABLE: dict[int, tuple[int, ...]] = {
-    4: (20, 20, 20, 20, 20),
-    3: (25, 25, 25, 25),
+    4: (0, 0, 34, 33, 33),
+    3: (0, 34, 33, 33),
     2: (34, 33, 33),
     1: (50, 50),
     0: (67, 33),

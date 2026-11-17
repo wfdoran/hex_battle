@@ -10,12 +10,13 @@ from __future__ import annotations
 
 import math
 import tkinter as tk
+from collections.abc import Iterable
 from tkinter import messagebox
 
 from . import icons
 from .ai import LEVELS, ComputerPlayer
 from .combat import battle_odds
-from .game import (DRAW, IDLE_TURNS_FOR_DRAW, MIN_DEFENSE, QUIET_TURNS_FOR_FATIGUE,
+from .game import (ANCHOR_BONUS, DRAW, IDLE_TURNS_FOR_DRAW, MIN_DEFENSE, MIN_MOVEMENT, QUIET_TURNS_FOR_FATIGUE,
                    QUIET_TURNS_FOR_RADIATION, FatigueEvent, Game, MoveResult, Phase,
                    RadiationEvent, RangedResult, opponent)
 from .grid import ALL_HEXES, COLUMN_LETTERS, Hex, label
@@ -45,7 +46,7 @@ COLORS = {
     "flash": "#ff8a00",
     "tile_outline": "#1c1c1c",
     "tile_text": "#ffffff",
-    "tired_text": "#ffd84d",  # a defense value lowered by fatigue
+    "tired_text": "#ffd84d",  # a stat lowered by fatigue
     "heart": "#ff5c74",
     "legend_icon": "#3a3a3a",
     "splash_text": "#e8dec3",
@@ -74,10 +75,23 @@ def unit_name(u: Unit) -> str:
     return f"{PLAYER_NAMES[u.owner]} #{u.kind}"
 
 
-def describe(u: Unit, rested_defense: int | None = None) -> str:
-    defense = f"{u.defense}" if rested_defense is None else f"{u.defense} (tired; was {rested_defense})"
-    return (f"{unit_name(u)}: health {u.health}/{u.max_health}, attack {u.attack}, "
-            f"defense {defense}, range {u.range}, movement {u.movement}, sight {u.sight}")
+def attack_text(u: Unit, anchored: bool) -> str:
+    """The unit's attack, shown as x+1 while it is anchored."""
+    return f"{u.attack}+{ANCHOR_BONUS}" if anchored else str(u.attack)
+
+
+def describe(u: Unit, rested: dict[str, int] | None = None, anchored: bool = False) -> str:
+    """The unit's stats; `rested` holds the values of any that fatigue lowered."""
+    rested = rested or {}
+
+    def stat(name: str) -> str:
+        value = f"{name} {getattr(u, name)}"
+        if name == "attack" and anchored:
+            value = f"attack {attack_text(u, anchored)} (anchored: +{ANCHOR_BONUS} when it fires)"
+        return value + f" (tired; was {rested[name]})" if name in rested else value
+
+    return (f"{unit_name(u)}: health {u.health}/{u.max_health}, {stat('attack')}, "
+            f"{stat('defense')}, {stat('range')}, {stat('movement')}, {stat('sight')}")
 
 
 def percent(p: float) -> str:
@@ -94,20 +108,24 @@ def column_names(cols: tuple[int, ...]) -> str:
 
 
 def draw_tile(cv: tk.Canvas, cx: float, cy: float, s: float, unit: Unit, health: int,
-              fill: str, tired: bool = False) -> None:
+              fill: str, tired: Iterable[str] = (), anchored: bool = False) -> None:
     """Draw a unit as a square tile of side s: stats on top, hearts below.
-    A tired unit's defense, lowered by fatigue, is drawn in a warning color."""
+    Stats named in `tired`, lowered by fatigue, are drawn in a warning color.
+    An anchored unit's attack is shown as x+1."""
     x0, y0 = cx - s / 2, cy - s / 2
     cv.create_rectangle(x0, y0, x0 + s, y0 + s, fill=fill, outline=COLORS["tile_outline"],
                         width=max(1.0, s / 40))
     isz = s * 0.17
     font = ("Helvetica", -max(7, round(s * 0.17)), "bold")
+    # Attack and defense on top, with room for an anchored attack's "x+1";
+    # range, movement and sight below.
     slots = [(x0 + s * fx, y0 + s * fy) for fx, fy in
-             ((1 / 6, 0.16), (3 / 6, 0.16), (5 / 6, 0.16), (0.30, 0.39), (0.70, 0.39))]
+             ((0.20, 0.16), (0.70, 0.16), (1 / 6, 0.39), (3 / 6, 0.39), (5 / 6, 0.39))]
     for (stat, draw_icon), (sx, sy) in zip(icons.STAT_ICONS, slots):
         draw_icon(cv, sx - isz * 0.45, sy, isz, COLORS["tile_text"])
-        color = COLORS["tired_text" if tired and stat == "defense" else "tile_text"]
-        cv.create_text(sx + isz * 0.55, sy, text=str(getattr(unit, stat)), font=font, fill=color)
+        color = COLORS["tired_text" if stat in tired else "tile_text"]
+        text = attack_text(unit, anchored) if stat == "attack" else str(getattr(unit, stat))
+        cv.create_text(sx + isz * 0.22, sy, text=text, font=font, fill=color, anchor="w")
     rows = [0.72] if unit.max_health <= 4 else [0.62, 0.84]
     for i in range(unit.max_health):
         row, col = divmod(i, 4)
@@ -547,7 +565,7 @@ class App:
         if g.fatigue and g.phase is not Phase.OVER:
             self.radiation_label.config(
                 text=self.radiation_label.cget("text")
-                + f"\nFatigue has lowered defense by {g.fatigue}.")
+                + f"\nFatigue has lowered defense and movement by {g.fatigue}.")
         self.seed_label.config(text=f"Seed: {g.seed}")
 
         if g.phase is Phase.PLACEMENT:
@@ -642,7 +660,8 @@ class App:
             if pos not in vis:
                 continue
             x, y = self.center(pos)
-            draw_tile(cv, x, y, R * 1.24, u, hp, self.tile_color(u), u in g.rested_defense)
+            draw_tile(cv, x, y, R * 1.24, u, hp, self.tile_color(u), g.rested.get(u, ()),
+                      g.anchored(u))
             cv.create_text(x, y + R * 0.745, text=f"#{u.kind}", font=label_font,
                            fill=COLORS["label_visible"])
         if self.selected is not None and self.selected.pos and not self.override:
@@ -810,7 +829,7 @@ class App:
             text += " ☢ radioactive"
         unit = self.unit_shown_at(h)
         if unit is not None:
-            text += "\n" + describe(unit, self.game.rested_defense.get(unit))
+            text += "\n" + describe(unit, self.game.rested.get(unit), self.game.anchored(unit))
             self.show_odds(unit, h, event.x, event.y)
         self.info.config(text=text)
 
@@ -867,7 +886,8 @@ class App:
 
     def on_panel_hover(self, event) -> None:
         unit = self._panel_unit(event)
-        self.info.config(text=describe(unit, self.game.rested_defense.get(unit)) if unit else "")
+        self.info.config(text=describe(unit, self.game.rested.get(unit), self.game.anchored(unit))
+                         if unit else "")
 
     # ----- actions and animation ---------------------------------------------
 
@@ -991,6 +1011,8 @@ class App:
         for p in (1, 2):
             if a.owner == p or a.pos in self.game.visible_hexes(p):
                 shooter = f"{unit_name(a)} at {label(a.pos)}"
+                if r.anchored:
+                    shooter += f" (anchored, attack {attack_text(a, True)})"
             else:
                 shooter = f"A hidden {PLAYER_NAMES[a.owner]} unit"
             self.post(p, f"{shooter} fired at {unit_name(t)} at {label(r.hex)}: "
@@ -1003,8 +1025,8 @@ class App:
         for e in events:
             if isinstance(e, FatigueEvent):
                 self.post_all(f"{QUIET_TURNS_FOR_FATIGUE} turns without damage: every unit is "
-                              f"fatigued, and its defense drops by 1 (to no less than "
-                              f"{MIN_DEFENSE}).")
+                              f"fatigued. Defense and movement drop by 1 (to no less than "
+                              f"{MIN_DEFENSE} and {MIN_MOVEMENT}).")
                 continue
             cols = column_names(e.columns)
             if e.kind == "warning":

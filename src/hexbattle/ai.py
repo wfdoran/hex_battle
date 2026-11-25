@@ -43,7 +43,7 @@ UNITS_PER_COLUMN = (4, 3, 3)
 MOVE_THRESHOLD = 0.05  # minimum improvement before a unit bothers to move
 RADIATION_PENALTY = 20.0
 # Weights for the hard level's position score.
-HARD_DANGER = 0.6  # expected loss from enemies that can reach the hex next turn
+HARD_DANGER = 0.9  # expected loss from enemies that can reach the hex next turn
 HARD_APPROACH = 0.7  # pull toward enemies, per hex of distance
 HARD_APPETITE = 3.0  # extra pull toward enemies the unit is likely to beat
 HARD_DANGER_CAP = 1.0  # a unit can only be lost once, times its value

@@ -112,8 +112,9 @@ class CombatTest(unittest.TestCase):
         wins = sum(battle_rounds(5, 3, 2, 4, 2, 4, rng)[2] == 0 and True for _ in range(n))
         # wins here counts defender deaths, i.e. attacker wins plus mutual destruction
         self.assertAlmostEqual(wins / n, win + both, delta=0.015)
-        # One health each, +2 both ways: a round ends it unless both miss (34% each).
-        self.assertAlmostEqual(battle_odds(1, 3, 1, 1, 3, 1)[2], 0.66 ** 2 / (1 - 0.34 ** 2))
+        # One health each, +2 both ways: a round ends it unless both miss.
+        miss = DAMAGE_TABLE[2][0] / 100
+        self.assertAlmostEqual(battle_odds(1, 3, 1, 1, 3, 1)[2], (1 - miss) ** 2 / (1 - miss ** 2))
         self.assertAlmostEqual(battle_odds(1, 5, 1, 1, 5, 1)[2], 1.0)  # +4 never misses
 
 

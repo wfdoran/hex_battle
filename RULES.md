@@ -150,15 +150,15 @@ Every attack compares the attacker's **attack** with the defender's
 
 | attack − defense | 0 damage | 1 | 2 | 3 | 4 |
 |------------------|----------|-----|-----|-----|-----|
-| +4 | | | 34% | 33% | 33% |
-| +3 | | 34% | 33% | 33% | |
-| +2 | 34% | 33% | 33% | | |
-| +1 | 50% | 50% | | | |
-| 0  | 67% | 33% | | | |
-| −1 | 75% | 25% | | | |
-| −2 | 80% | 20% | | | |
-| −3 | 84% | 16% | | | |
-| −4 | 86% | 14% | | | |
+| +4 | | | 25% | 50% | 25% |
+| +3 | | 20% | 60% | 20% | |
+| +2 | 10% | 75% | 15% | | |
+| +1 | 30% | 70% | | | |
+| 0  | 50% | 50% | | | |
+| −1 | 60% | 40% | | | |
+| −2 | 70% | 30% | | | |
+| −3 | 80% | 20% | | | |
+| −4 | 85% | 15% | | | |
 
 **Battles.** Moving a unit onto an enemy starts a battle. Both units attack
 each other at the same time, round after round, until one or both are

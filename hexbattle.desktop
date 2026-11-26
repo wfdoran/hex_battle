@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Hex Battle
+Comment=A simple turn-based abstract war game
+Exec=/home/doran/anaconda3/bin/python3 -m hexbattle
+Path=/home/doran/Documents/Programs/Repos/hex_battle/src
+Icon=/home/doran/Documents/Programs/Repos/hex_battle/icons/hexbattle.svg
+Terminal=false
+Categories=Game;StrategyGame;
+Keywords=hex;war;strategy;turn-based;
+StartupNotify=true
+StartupWMClass=Hexbattle
